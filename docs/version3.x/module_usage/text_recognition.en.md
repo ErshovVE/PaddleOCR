@@ -1012,6 +1012,11 @@ Notes:
 - `train_seq_len` only changes training; the exported model is the same. When `Eval` uses a sampler,
   `tools/export_model.py` adds `RecResizeImg` to `inference.yml` for the inference pipeline.
 - On Windows the last evaluation batch is skipped; with the sampler it holds the widest images.
+- Document-scan augmentations in `RecAug` (all off by default): `rotate_prob` — small rotation whose
+  limit falls smoothly with the line length (`rotate_ratios: [3, 30]`, `rotate_degs: [3.0, 0.6]`: up to 3° for
+  words, 0.6° at w/h 30), the canvas grows in height so nothing is cut; `downscale_prob` — low-DPI scan;
+  `jpeg_prob` — JPEG artifacts; `stroke_prob` — bolder or thinner strokes (`stroke_thin_share`), changes that
+  would break or glue characters are undone.
 
 ### 4.3 Model Evaluation
 

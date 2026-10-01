@@ -12,16 +12,38 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+import os
 import random
 
 import numpy as np
 import pytest
 
-from ppocr.data.imaug.rec_img_aug import RecAug, RecConAug
+from ppocr.data.imaug.rec_img_aug import (
+    RecAug,
+    RecConAug,
+    _ink_mask,
+    _ink_threshold,
+    _n_components,
+    change_stroke,
+    downscale_upscale,
+    jpeg_compress,
+    max_rotation_deg,
+    rotate_text,
+)
 from ppocr.data.imaug.text_image_aug import tia_distort
 
 np.random.seed(42)
 random.seed(42)
+
+NO_BDA = dict(
+    crop_prob=0,
+    reverse_prob=0,
+    noise_prob=0,
+    jitter_prob=0,
+    blur_prob=0,
+    hsv_aug_prob=0,
+)
 
 
 def _text_image(w, h=48, bg=255, fg=0):
@@ -263,3 +285,228 @@ class TestRecConAugFitBatch:
         assert "66.7% of 3 samples" in messages[0]
         assert "width 1" in messages[0]
         assert aug.stats["calls"] == 1
+
+
+class TestRotation:
+    @pytest.mark.parametrize(
+        "ratio,expected", [(1, 3.0), (3, 3.0), (30, 0.6), (29, 0.6144)]
+    )
+    def test_anchor_points(self, ratio, expected):
+        assert max_rotation_deg(ratio) == pytest.approx(expected, abs=1e-3)
+
+    def test_smooth_and_monotone(self):
+        ratios = np.linspace(1, 100, 5000)
+        limits = np.array([max_rotation_deg(r) for r in ratios])
+        assert np.all(np.diff(limits) <= 0)
+        # continuous at the first anchor and never steeper than 1 degree per w/h unit
+        assert max_rotation_deg(3 - 1e-9) == pytest.approx(max_rotation_deg(3 + 1e-9))
+        assert np.max(-np.diff(limits) / np.diff(ratios)) < 1.0
+
+    def test_custom_anchors(self):
+        assert max_rotation_deg(10, (2, 20), (4, 1)) == pytest.approx(
+            4 * (2 / 10) ** (np.log(4) / np.log(10))
+        )
+
+    def test_grows_height_only(self):
+        img = _text_image(1500)
+        out = rotate_text(img, 0.6)
+        expected_h = math.ceil(
+            48 * math.cos(math.radians(0.6)) + 1500 * math.sin(math.radians(0.6))
+        )
+        assert out.shape == (expected_h, 1500, 3)
+        assert rotate_text(img, 0.0).shape == img.shape
+
+    def test_tight_crop_nothing_cut(self):
+        img = np.full((30, 900, 3), 255, np.uint8)
+        for x in range(20, 880, 8):
+            img[:, x : x + 3] = 0  # letter strokes touch the top and bottom edges
+        for angle in (0.6, -0.6):
+            out = rotate_text(img, angle)
+            assert (out < 128).sum() >= 0.97 * (img < 128).sum()
+            # new margins are background, not smeared ink
+            assert (out[0, :, 0] > 128).mean() > 0.4
+
+    @pytest.mark.parametrize("width", [96, 480, 1440])
+    def test_rec_aug_angle_within_limit(self, width, monkeypatch):
+        import ppocr.data.imaug.rec_img_aug as rec_aug
+
+        angles = []
+        real = rec_aug.rotate_text
+        monkeypatch.setattr(
+            rec_aug,
+            "rotate_text",
+            lambda img, angle: angles.append(angle) or real(img, angle),
+        )
+        aug = RecAug(**NO_BDA, tia_prob=0, rotate_prob=1.0)
+        for _ in range(200):
+            out = aug({"image": _text_image(width)})
+            assert out["image"].shape[1:] == (width, 3)
+        limit = max_rotation_deg(width / 48)
+        assert max(abs(a) for a in angles) <= limit
+        assert max(abs(a) for a in angles) > 0.8 * limit  # the range is used
+
+    def test_disabled_by_default(self, monkeypatch):
+        import ppocr.data.imaug.rec_img_aug as rec_aug
+
+        monkeypatch.setattr(rec_aug, "rotate_text", lambda *a: pytest.fail("rotated"))
+        random.seed(5)
+        RecAug(**NO_BDA, tia_prob=0)({"image": _text_image(100)})
+        after_default = random.random()
+        random.seed(5)
+        RecAug(**NO_BDA, tia_prob=0, rotate_prob=0.0)({"image": _text_image(100)})
+        assert random.random() == after_default
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"rotate_ratios": (30, 3)},
+            {"rotate_degs": (0.6, 3)},
+            {"rotate_degs": (3, 0)},
+        ],
+    )
+    def test_invalid_params(self, kwargs):
+        with pytest.raises(AssertionError, match="rotate_"):
+            RecAug(**kwargs)
+
+
+def _font_line(size, font="arial.ttf", bold=False):
+    from PIL import Image, ImageDraw, ImageFont
+
+    candidates = [
+        r"C:\Windows\Fonts\%s" % ("arialbd.ttf" if bold else font),
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans%s.ttf" % ("-Bold" if bold else ""),
+    ]
+    path = next((p for p in candidates if os.path.exists(p)), None)
+    if path is None:
+        pytest.skip("no TrueType font")
+    f = ImageFont.truetype(path, size)
+    text = "Документ ГОСТ 1.13-85 тонкий"
+    im = Image.new("RGB", (int(f.getlength(text)) + 10, int(size * 1.4)), "white")
+    ImageDraw.Draw(im).text((5, 2), text, fill="black", font=f)
+    return np.array(im)[:, :, ::-1].copy()
+
+
+def _ink(img):
+    t, light = _ink_threshold(img)
+    return _ink_mask(img, t, light)
+
+
+class TestStroke:
+    def test_thicken_adds_ink(self):
+        img = _font_line(30)
+        out = change_stroke(img, thicken=True, alpha=0.6)
+        assert out.shape == img.shape and out.dtype == img.dtype
+        assert _ink(out).sum() > _ink(img).sum()
+
+    def test_thin_large_bold_text_keeps_strokes(self):
+        img = _font_line(30, bold=True)
+        out = change_stroke(img, thicken=False, alpha=0.6)
+        assert out is not img
+        t, light = _ink_threshold(img)
+        before, after = _ink_mask(img, t, light), _ink_mask(out, t, light)
+        assert 0.6 * before.sum() <= after.sum() < before.sum()
+        assert _n_components(after) <= _n_components(before)
+
+    def test_thin_small_text_left_alone(self):
+        img = _font_line(12)
+        assert change_stroke(img, thicken=False, alpha=0.6) is img
+
+    def test_one_pixel_strokes_never_thinned(self):
+        img = np.full((40, 200, 3), 255, np.uint8)
+        img[20, 10:190] = 0  # 1 px line
+        img[5:35, 100] = 0
+        assert change_stroke(img, thicken=False, alpha=1.0) is img
+
+    def test_thicken_that_glues_letters_is_undone(self):
+        img = np.full((30, 200, 3), 255, np.uint8)
+        for x in range(10, 190, 3):  # 2 px bars, 1 px gaps
+            img[5:25, x : x + 2] = 0
+        assert change_stroke(img, thicken=True, alpha=1.0) is img
+
+    def test_light_text_on_dark_background(self):
+        img = 255 - _font_line(30)
+        out = change_stroke(img, thicken=True, alpha=0.6)
+        assert (out > 128).sum() > (img > 128).sum()  # light strokes grew
+
+    def test_blank_image(self):
+        img = np.full((30, 100, 3), 200, np.uint8)
+        assert change_stroke(img, thicken=False, alpha=0.5) is img
+
+
+class TestScanArtifacts:
+    def test_downscale_keeps_shape(self):
+        img = _text_image(500)
+        out = downscale_upscale(img, 0.5)
+        assert out.shape == img.shape and out.dtype == img.dtype
+
+    def test_jpeg_keeps_shape_and_changes_pixels(self):
+        img = _font_line(20)
+        out = jpeg_compress(img, 20)
+        assert out.shape == img.shape and out.dtype == np.uint8
+        assert np.abs(out.astype(int) - img).mean() > 0
+
+    def test_downscale_min_height(self, monkeypatch):
+        import ppocr.data.imaug.rec_img_aug as rec_aug
+
+        scales = []
+        real = rec_aug.downscale_upscale
+        monkeypatch.setattr(
+            rec_aug,
+            "downscale_upscale",
+            lambda img, s: scales.append(s) or real(img, s),
+        )
+        aug = RecAug(**NO_BDA, tia_prob=0, downscale_prob=1.0)
+        for _ in range(100):
+            aug({"image": _text_image(300, h=28)})
+        assert min(scales) * 28 >= 14 - 1e-6
+        aug({"image": _text_image(300, h=12)})  # too small to shrink
+        assert len(scales) == 100
+
+    def test_jpeg_quality_range(self, monkeypatch):
+        import ppocr.data.imaug.rec_img_aug as rec_aug
+
+        qualities = []
+        monkeypatch.setattr(
+            rec_aug, "jpeg_compress", lambda img, q: qualities.append(q) or img
+        )
+        aug = RecAug(**NO_BDA, tia_prob=0, jpeg_prob=1.0, jpeg_quality=(30, 40))
+        for _ in range(100):
+            aug({"image": _text_image(100)})
+        assert min(qualities) >= 30 and max(qualities) <= 40
+
+    def test_all_new_options_keep_shape(self):
+        aug = RecAug(
+            **NO_BDA,
+            tia_prob=0,
+            rotate_prob=1.0,
+            downscale_prob=1.0,
+            jpeg_prob=1.0,
+            stroke_prob=1.0,
+        )
+        img = _font_line(30)
+        for _ in range(20):
+            out = aug({"image": img.copy()})["image"]
+            assert out.shape[1:] == img.shape[1:] and out.shape[0] >= img.shape[0]
+
+    def test_defaults_draw_no_random_numbers(self):
+        random.seed(3)
+        RecAug(**NO_BDA, tia_prob=0)({"image": _text_image(100)})
+        expected = random.random()
+        random.seed(3)
+        RecAug(**NO_BDA, tia_prob=0, downscale_prob=0, jpeg_prob=0, stroke_prob=0)(
+            {"image": _text_image(100)}
+        )
+        assert random.random() == expected
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"downscale_range": (0, 0.5)},
+            {"jpeg_quality": (80, 20)},
+            {"stroke_alpha": (0.5, 1.5)},
+            {"stroke_thin_share": 2},
+        ],
+    )
+    def test_invalid(self, kwargs):
+        with pytest.raises(AssertionError):
+            RecAug(**kwargs)

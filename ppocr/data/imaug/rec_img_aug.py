@@ -32,6 +32,119 @@ from paddle import get_device
 from paddle.vision.transforms import Compose
 
 
+def max_rotation_deg(wh_ratio, ratios=(3.0, 30.0), degs=(3.0, 0.6)):
+    """Largest rotation angle (degrees) for a text image with this w/h ratio.
+
+    Up to ratios[0] the limit is degs[0]; beyond it the limit falls smoothly,
+    linearly in log-log scale through (ratios[0], degs[0]) and
+    (ratios[1], degs[1]) and on past ratios[1]. A long line therefore only
+    tilts a little: its far end moves by a similar share of the text height
+    whatever the line length.
+    """
+    (r0, r1), (d0, d1) = ratios, degs
+    if wh_ratio <= r0:
+        return float(d0)
+    power = math.log(d0 / d1) / math.log(r1 / r0)
+    return float(d0 * (r0 / wh_ratio) ** power)
+
+
+def rotate_text(img, angle):
+    """Rotate around the centre; the canvas grows in height so nothing is cut.
+
+    Text crops are often tight (no margin above and below the letters), so the
+    tilted line needs h * cos + w * sin rows. The width is kept, new pixels get
+    the background colour (median of the border; replicating edge rows would
+    smear letters that touch the border).
+    """
+    h, w = img.shape[:2]
+    rad = math.radians(abs(angle))
+    new_h = int(math.ceil(h * math.cos(rad) + w * math.sin(rad)))
+    m = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), angle, 1.0)
+    m[1, 2] += (new_h - h) / 2.0
+    border = np.concatenate(
+        [img[0].reshape(-1, *img.shape[2:]), img[-1].reshape(-1, *img.shape[2:])]
+    )
+    fill = np.median(border, axis=0)
+    fill = tuple(float(v) for v in np.atleast_1d(fill))
+    return cv2.warpAffine(
+        img, m, (w, new_h), borderMode=cv2.BORDER_CONSTANT, borderValue=fill
+    )
+
+
+def downscale_upscale(img, scale):
+    """Shrink by `scale` and resize back: a scan at a lower resolution."""
+    h, w = img.shape[:2]
+    small = cv2.resize(
+        img,
+        (max(1, int(round(w * scale))), max(1, int(round(h * scale)))),
+        interpolation=cv2.INTER_AREA,
+    )
+    return cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
+
+
+def jpeg_compress(img, quality):
+    """Encode/decode as JPEG with the given quality (block artifacts)."""
+    ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
+    if not ok:
+        return img
+    out = cv2.imdecode(buf, cv2.IMREAD_UNCHANGED)
+    return out.reshape(img.shape) if out is not None else img
+
+
+def _gray(img):
+    return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+
+
+def _ink_threshold(img):
+    """Otsu threshold of the text and whether the background is light."""
+    gray = _gray(img)
+    light_bg = bool(np.median(gray) >= gray.mean())
+    thresh, _ = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return thresh, light_bg
+
+
+def _ink_mask(img, thresh, light_bg):
+    gray = _gray(img)
+    return gray < thresh if light_bg else gray > thresh
+
+
+def _n_components(mask):
+    return cv2.connectedComponents(mask.astype(np.uint8), connectivity=8)[0] - 1
+
+
+def change_stroke(img, thicken, alpha, min_ink_keep=0.6, max_merge=0.25):
+    """Make strokes bolder or thinner by up to ~1 px, softly.
+
+    The image is blended (weight alpha) with its 2x2 min/max-filtered version,
+    so edges change by a fraction of a pixel. Thinning is undone when it
+    breaks strokes (more connected components at the original threshold) or
+    keeps less than min_ink_keep of the text pixels: thin fonts and small
+    text stay as they are. Thickening is undone when it glues characters
+    together: more than max_merge of the components merge.
+    """
+    thresh, light_bg = _ink_threshold(img)
+    ink = _ink_mask(img, thresh, light_bg)
+    if not ink.any() or ink.all():
+        return img
+    kernel = np.ones((2, 2), np.uint8)
+    # dark text on light background: erode (min) = bolder, dilate (max) = thinner
+    grow_dark = thicken == light_bg
+    morph = cv2.erode(img, kernel) if grow_dark else cv2.dilate(img, kernel)
+    out = cv2.addWeighted(img, 1.0 - alpha, morph, alpha, 0).astype(img.dtype)
+    if not thicken:
+        new_ink = _ink_mask(out, thresh, light_bg)
+        if (new_ink & ink).sum() < min_ink_keep * ink.sum():
+            return img
+        if _n_components(new_ink) > _n_components(ink):
+            return img
+    else:
+        n_before = _n_components(ink)
+        new_ink = _ink_mask(out, thresh, light_bg)
+        if _n_components(new_ink) < (1.0 - max_merge) * n_before:
+            return img
+    return out
+
+
 class RecAug(object):
     def __init__(
         self,
@@ -43,12 +156,60 @@ class RecAug(object):
         blur_prob=0.4,
         hsv_aug_prob=0.4,
         tia_max_vertical_ratio=None,
+        rotate_prob=0.0,
+        rotate_ratios=(3.0, 30.0),
+        rotate_degs=(3.0, 0.6),
+        downscale_prob=0.0,
+        downscale_range=(0.5, 0.9),
+        downscale_min_height=14,
+        jpeg_prob=0.0,
+        jpeg_quality=(25, 70),
+        stroke_prob=0.0,
+        stroke_thin_share=0.3,
+        stroke_alpha=(0.3, 0.6),
+        stroke_min_height=20,
+        stroke_min_ink_keep=0.6,
+        stroke_max_merge=0.25,
         **kwargs,
     ):
         # tia_max_vertical_ratio: cap of the vertical TIA distortion as a share
         # of the image height (e.g. 0.25); None keeps the width-based shift.
+        # rotate_*: small rotation, the limit depends on w/h (max_rotation_deg).
+        # downscale_*: lower scan resolution, the shrunk image keeps at least
+        #   downscale_min_height px; jpeg_*: compression artifacts;
+        # stroke_*: bolder / (carefully) thinner strokes, see change_stroke.
+        assert (
+            len(rotate_ratios) == 2 and 0 < rotate_ratios[0] < rotate_ratios[1]
+        ), "rotate_ratios must be increasing (r0, r1) > 0, got {}".format(rotate_ratios)
+        assert (
+            len(rotate_degs) == 2 and rotate_degs[0] >= rotate_degs[1] > 0
+        ), "rotate_degs must be (d0, d1) with d0 >= d1 > 0, got {}".format(rotate_degs)
         self.tia_prob = tia_prob
         self.tia_max_vertical_ratio = tia_max_vertical_ratio
+        self.rotate_prob = rotate_prob
+        self.rotate_ratios = tuple(rotate_ratios)
+        self.rotate_degs = tuple(rotate_degs)
+        assert (
+            0 < downscale_range[0] <= downscale_range[1] <= 1
+        ), "downscale_range must be 0 < lo <= hi <= 1, got {}".format(downscale_range)
+        assert (
+            1 <= jpeg_quality[0] <= jpeg_quality[1] <= 100
+        ), "jpeg_quality must be 1 <= lo <= hi <= 100, got {}".format(jpeg_quality)
+        assert (
+            0 <= stroke_alpha[0] <= stroke_alpha[1] <= 1
+        ), "stroke_alpha must be 0 <= lo <= hi <= 1, got {}".format(stroke_alpha)
+        assert 0 <= stroke_thin_share <= 1, "stroke_thin_share must be in [0, 1]"
+        self.downscale_prob = downscale_prob
+        self.downscale_range = tuple(downscale_range)
+        self.downscale_min_height = downscale_min_height
+        self.jpeg_prob = jpeg_prob
+        self.jpeg_quality = tuple(int(q) for q in jpeg_quality)
+        self.stroke_prob = stroke_prob
+        self.stroke_thin_share = stroke_thin_share
+        self.stroke_alpha = tuple(stroke_alpha)
+        self.stroke_min_height = stroke_min_height
+        self.stroke_min_ink_keep = stroke_min_ink_keep
+        self.stroke_max_merge = stroke_max_merge
         self.bda = BaseDataAugmentation(
             crop_prob, reverse_prob, noise_prob, jitter_prob, blur_prob, hsv_aug_prob
         )
@@ -68,6 +229,29 @@ class RecAug(object):
                 img = tia_distort(img, random.randint(3, 6), max_vertical_shift)
                 img = tia_stretch(img, random.randint(3, 6))
                 img = tia_perspective(img)
+
+        # the options below draw no random numbers when disabled (legacy RNG stream)
+        if self.stroke_prob > 0 and random.random() < self.stroke_prob:
+            thicken = random.random() >= self.stroke_thin_share
+            if thicken or h >= self.stroke_min_height:
+                img = change_stroke(
+                    img,
+                    thicken,
+                    random.uniform(*self.stroke_alpha),
+                    self.stroke_min_ink_keep,
+                    self.stroke_max_merge,
+                )
+        if self.rotate_prob > 0 and random.random() < self.rotate_prob:
+            limit = max_rotation_deg(w / h, self.rotate_ratios, self.rotate_degs)
+            img = rotate_text(img, random.uniform(-limit, limit))
+        if self.downscale_prob > 0 and random.random() < self.downscale_prob:
+            lo = max(self.downscale_range[0], self.downscale_min_height / h)
+            if lo < self.downscale_range[1]:
+                img = downscale_upscale(
+                    img, random.uniform(lo, self.downscale_range[1])
+                )
+        if self.jpeg_prob > 0 and random.random() < self.jpeg_prob:
+            img = jpeg_compress(img, random.randint(*self.jpeg_quality))
 
         # bda
         data["image"] = img

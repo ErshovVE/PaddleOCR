@@ -1033,6 +1033,10 @@ Eval:                          # 与推理一致的验证：每个 batch 使用�
 - `train_seq_len` 只影响训练，导出的模型不变。当 `Eval` 使用 sampler 时，`tools/export_model.py` 会在
   `inference.yml` 中为推理流程添加 `RecResizeImg`。
 - 在 Windows 上最后一个评估 batch 会被跳过；使用 sampler 时它包含最宽的图像。
+- `RecAug` 中的文档扫描增强（默认全部关闭）：`rotate_prob` —— 小角度旋转，上限随文本行长度平滑减小
+  （`rotate_ratios: [3, 30]`、`rotate_degs: [3.0, 0.6]`：单词最多 3°，w/h 为 30 时 0.6°），画布高度相应增加，不会裁切文字；
+  `downscale_prob` —— 低分辨率扫描；`jpeg_prob` —— JPEG 压缩伪影；`stroke_prob` —— 笔画加粗或变细（`stroke_thin_share`），
+  会导致字符断裂或粘连的变化会被撤销。
 
 ### 4.3 模型评估
 
