@@ -118,6 +118,11 @@ Train:
         jitter_prob: 0.1
         blur_prob: 0.1
         hsv_aug_prob: 0.1
+        rotate_prob: 0.2          # up to 3 deg for words, 0.6 deg at w/h 30, smooth in between
+        downscale_prob: 0.15      # low-DPI scan, shrunk text stays >= 14 px high
+        jpeg_prob: 0.15           # JPEG quality 25..70
+        stroke_prob: 0.1          # bolder strokes; thinner in 30% of cases, only where safe
+        stroke_thin_share: 0.3
     - MultiLabelEncode:
         gtc_encode: NRTRLabelEncode
     - KeepKeys:
