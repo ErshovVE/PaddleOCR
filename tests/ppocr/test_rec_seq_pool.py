@@ -91,3 +91,12 @@ class TestBackboneTrainSeqLen:
     def test_invalid_train_seq_len(self, make, bad):
         with pytest.raises(AssertionError, match="train_seq_len"):
             make(train_seq_len=bad)
+
+
+def test_repsvtr_rejects_unknown_kwargs():
+    from ppocr.modeling.backbones.rec_repvit import RepSVTR
+
+    with pytest.raises(TypeError):
+        RepSVTR(se_gat="none")
+    with pytest.raises(AssertionError, match="se gate"):
+        RepSVTR(se_gate="relu")

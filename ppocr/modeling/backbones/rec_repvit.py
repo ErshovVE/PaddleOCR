@@ -76,8 +76,16 @@ class SEModule(nn.Layer):
         rd_channels=None,
         rd_divisor=8,
         act_layer=nn.ReLU,
+        gate="sigmoid",
     ):
         super(SEModule, self).__init__()
+        # gate="none" multiplies by the raw excitation, as in some torch ports
+        # of RepSVTR (e.g. torchocr repvit_svtr); "sigmoid" is the standard SE.
+        assert gate in (
+            "sigmoid",
+            "none",
+        ), "se gate must be 'sigmoid' or 'none', got '{}'".format(gate)
+        self.gate = gate
         if not rd_channels:
             rd_channels = make_divisible(
                 channels * rd_ratio, rd_divisor, round_limit=0.0
@@ -91,6 +99,8 @@ class SEModule(nn.Layer):
         x_se = self.fc1(x_se)
         x_se = self.act(x_se)
         x_se = self.fc2(x_se)
+        if self.gate == "none":
+            return x * x_se
         return x * nn.functional.sigmoid(x_se)
 
 
@@ -223,7 +233,17 @@ class RepVGGDW(nn.Layer):
 
 
 class RepViTBlock(nn.Layer):
-    def __init__(self, inp, hidden_dim, oup, kernel_size, stride, use_se, use_hs):
+    def __init__(
+        self,
+        inp,
+        hidden_dim,
+        oup,
+        kernel_size,
+        stride,
+        use_se,
+        use_hs,
+        se_gate="sigmoid",
+    ):
         super(RepViTBlock, self).__init__()
 
         self.identity = stride == 1 and inp == oup
@@ -234,7 +254,7 @@ class RepViTBlock(nn.Layer):
                 Conv2D_BN(
                     inp, inp, kernel_size, stride, (kernel_size - 1) // 2, groups=inp
                 ),
-                SEModule(inp, 0.25) if use_se else nn.Identity(),
+                SEModule(inp, 0.25, gate=se_gate) if use_se else nn.Identity(),
                 Conv2D_BN(inp, oup, ks=1, stride=1, pad=0),
             )
             self.channel_mixer = Residual(
@@ -250,7 +270,7 @@ class RepViTBlock(nn.Layer):
             assert self.identity
             self.token_mixer = nn.Sequential(
                 RepVGGDW(inp),
-                SEModule(inp, 0.25) if use_se else nn.Identity(),
+                SEModule(inp, 0.25, gate=se_gate) if use_se else nn.Identity(),
             )
             self.channel_mixer = Residual(
                 nn.Sequential(
@@ -267,7 +287,7 @@ class RepViTBlock(nn.Layer):
 
 
 class RepViT(nn.Layer):
-    def __init__(self, cfgs, in_channels=3, out_indices=None):
+    def __init__(self, cfgs, in_channels=3, out_indices=None, se_gate="sigmoid"):
         super(RepViT, self).__init__()
         # setting of inverted residual blocks
         self.cfgs = cfgs
@@ -286,7 +306,16 @@ class RepViT(nn.Layer):
             output_channel = _make_divisible(c, 8)
             exp_size = _make_divisible(input_channel * t, 8)
             layers.append(
-                block(input_channel, exp_size, output_channel, k, s, use_se, use_hs)
+                block(
+                    input_channel,
+                    exp_size,
+                    output_channel,
+                    k,
+                    s,
+                    use_se,
+                    use_hs,
+                    se_gate=se_gate,
+                )
             )
             input_channel = output_channel
         self.features = nn.LayerList(layers)
@@ -346,9 +375,12 @@ class RepViT(nn.Layer):
         self.is_repped = True
 
 
-def RepSVTR(in_channels=3):
+def RepSVTR(in_channels=3, se_gate="sigmoid"):
     """
     Constructs a MobileNetV3-Large model
+
+    se_gate: "sigmoid" (default) or "none" for weights trained without the SE
+        sigmoid gate.
     """
     # k, t, c, SE, HS, s
     cfgs = [
@@ -366,7 +398,7 @@ def RepSVTR(in_channels=3):
         [3, 2, 384, 1, 1, 1],
         [3, 2, 384, 0, 1, 1],
     ]
-    return RepViT(cfgs, in_channels=in_channels)
+    return RepViT(cfgs, in_channels=in_channels, se_gate=se_gate)
 
 
 def RepSVTR_det(in_channels=3, out_indices=[2, 5, 10, 13]):
