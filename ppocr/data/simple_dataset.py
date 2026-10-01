@@ -532,6 +532,8 @@ class MultiScaleDataSet(SimpleDataSet):
                 raise Exception("{} does not exist!".format(img_path))
             data["image"] = _load_image_bytes(img_path)
             data["ext_data"] = self.get_ext_data()
+            # size the image will be resized to (RecConAug can fit into it)
+            data["batch_shape"] = (img_height, img_width)
             outs = transform(data, self.ops[:-1])
             if outs is not None:
                 outs = self.resize_norm_img(outs, img_width, img_height)

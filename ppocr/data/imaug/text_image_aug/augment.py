@@ -20,11 +20,22 @@ import numpy as np
 from .warp_mls import WarpMLS
 
 
-def tia_distort(src, segment=4):
+def tia_distort(src, segment=4, max_vertical_shift=None):
+    """Distort control points; max_vertical_shift (px) caps the vertical part.
+
+    The shift threshold grows with the segment width, so on long lines (wide
+    images) the vertical shift is far larger than the text height. Capping it
+    keeps the text inside the image.
+    """
     img_h, img_w = src.shape[:2]
 
     cut = img_w // segment
     thresh = cut // 3
+    v_thresh = (
+        thresh
+        if max_vertical_shift is None
+        else max(1, min(thresh, int(max_vertical_shift)))
+    )
 
     src_pts = list()
     dst_pts = list()
@@ -34,14 +45,15 @@ def tia_distort(src, segment=4):
     src_pts.append([img_w, img_h])
     src_pts.append([0, img_h])
 
-    dst_pts.append([np.random.randint(thresh), np.random.randint(thresh)])
-    dst_pts.append([img_w - np.random.randint(thresh), np.random.randint(thresh)])
+    dst_pts.append([np.random.randint(thresh), np.random.randint(v_thresh)])
+    dst_pts.append([img_w - np.random.randint(thresh), np.random.randint(v_thresh)])
     dst_pts.append(
-        [img_w - np.random.randint(thresh), img_h - np.random.randint(thresh)]
+        [img_w - np.random.randint(thresh), img_h - np.random.randint(v_thresh)]
     )
-    dst_pts.append([np.random.randint(thresh), img_h - np.random.randint(thresh)])
+    dst_pts.append([np.random.randint(thresh), img_h - np.random.randint(v_thresh)])
 
     half_thresh = thresh * 0.5
+    half_v_thresh = v_thresh * 0.5
 
     for cut_idx in np.arange(1, segment, 1):
         src_pts.append([cut * cut_idx, 0])
@@ -49,13 +61,13 @@ def tia_distort(src, segment=4):
         dst_pts.append(
             [
                 cut * cut_idx + np.random.randint(thresh) - half_thresh,
-                np.random.randint(thresh) - half_thresh,
+                np.random.randint(v_thresh) - half_v_thresh,
             ]
         )
         dst_pts.append(
             [
                 cut * cut_idx + np.random.randint(thresh) - half_thresh,
-                img_h + np.random.randint(thresh) - half_thresh,
+                img_h + np.random.randint(v_thresh) - half_v_thresh,
             ]
         )
 

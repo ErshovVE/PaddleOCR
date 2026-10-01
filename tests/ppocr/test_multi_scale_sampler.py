@@ -257,6 +257,22 @@ class TestMultiScaleDataSet:
     def dataset(self, label_file):
         return MultiScaleDataSet(_config(label_file), "Eval", LOGGER)
 
+    def test_batch_shape_passed_to_transforms(self, dataset, monkeypatch):
+        import ppocr.data.simple_dataset as sd
+
+        seen = []
+        real_transform = sd.transform
+
+        def spy(data, ops=None):
+            seen.append(data.get("batch_shape"))
+            return real_transform(data, ops)
+
+        monkeypatch.setattr(sd, "transform", spy)
+        dataset[(320, 48, 1, 10.0, False)]
+        dataset[(320, 32, 0, None)]
+        assert seen[0] == (48, 480)
+        assert (32, 320) in seen
+
     def test_legacy_four_tuple_uses_sorted_index(self, dataset):
         # position 5 in ratio order is the widest image (1500 / 48 -> 31)
         image, _ = dataset[(320, 48, 5, 31.25)]

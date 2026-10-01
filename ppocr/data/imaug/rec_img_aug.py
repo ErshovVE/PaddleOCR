@@ -42,9 +42,13 @@ class RecAug(object):
         jitter_prob=0.4,
         blur_prob=0.4,
         hsv_aug_prob=0.4,
+        tia_max_vertical_ratio=None,
         **kwargs,
     ):
+        # tia_max_vertical_ratio: cap of the vertical TIA distortion as a share
+        # of the image height (e.g. 0.25); None keeps the width-based shift.
         self.tia_prob = tia_prob
+        self.tia_max_vertical_ratio = tia_max_vertical_ratio
         self.bda = BaseDataAugmentation(
             crop_prob, reverse_prob, noise_prob, jitter_prob, blur_prob, hsv_aug_prob
         )
@@ -56,7 +60,12 @@ class RecAug(object):
         # tia
         if random.random() <= self.tia_prob:
             if h >= 20 and w >= 20:
-                img = tia_distort(img, random.randint(3, 6))
+                max_vertical_shift = (
+                    None
+                    if self.tia_max_vertical_ratio is None
+                    else int(h * self.tia_max_vertical_ratio)
+                )
+                img = tia_distort(img, random.randint(3, 6), max_vertical_shift)
                 img = tia_stretch(img, random.randint(3, 6))
                 img = tia_perspective(img)
 
@@ -146,12 +155,40 @@ class ABINetRecAug(object):
 
 
 class RecConAug(object):
+    """Concatenate the sample with extra samples into one longer text line.
+
+    add_space: put a background-coloured gap between the images and a space
+        between the labels (otherwise words are glued: "foo" + "bar" = "foobar").
+    space_width_range: (min, max) gap width in px at height image_shape[0].
+    max_ratio_jitter: draw the w/h limit of the result uniformly from
+        [1, image_shape[1] / image_shape[0]] on every call, so concatenated
+        lines have varied lengths instead of all being close to the limit.
+    ext_aug: RecAug parameters applied to every attached image, or None.
+    fit_batch_width: with MultiScaleDataSet the image is later resized to the
+        batch size (data["batch_shape"]) and squeezed if it is wider; limit the
+        concatenation to the batch w/h ratio so text is not squeezed.
+    ctc_stride: input width per CTC step (8 for PP-OCRv4/v5/v6 rec backbones
+        with train_seq_len: -1). Do not concatenate when the label would need
+        more CTC steps than the batch width gives (its loss would be zero).
+    skip_unfit: try the next extra sample when one does not fit (too long or
+        too wide) instead of stopping; finds short words for narrow batches.
+    log_every: log concatenation statistics every N calls per worker (0: off).
+    """
+
     def __init__(
         self,
         prob=0.5,
         image_shape=(32, 320, 3),
         max_text_length=25,
         ext_data_num=1,
+        add_space=False,
+        space_width_range=(16, 80),
+        max_ratio_jitter=False,
+        ext_aug=None,
+        fit_batch_width=False,
+        ctc_stride=None,
+        skip_unfit=False,
+        log_every=0,
         **kwargs,
     ):
         self.ext_data_num = ext_data_num
@@ -159,8 +196,78 @@ class RecConAug(object):
         self.max_text_length = max_text_length
         self.image_shape = image_shape
         self.max_wh_ratio = self.image_shape[1] / self.image_shape[0]
+        assert (
+            len(space_width_range) == 2
+            and 0 <= space_width_range[0] <= space_width_range[1]
+        ), "space_width_range must be (min, max), 0 <= min <= max, got {}".format(
+            space_width_range
+        )
+        self.add_space = add_space
+        self.space_width_range = tuple(int(v) for v in space_width_range)
+        self.max_ratio_jitter = max_ratio_jitter
+        self.ext_aug = RecAug(**ext_aug) if ext_aug is not None else None
+        assert ctc_stride is None or ctc_stride > 0, "ctc_stride must be > 0"
+        self.fit_batch_width = fit_batch_width
+        self.ctc_stride = ctc_stride
+        self.skip_unfit = skip_unfit
+        self.log_every = int(log_every)
+        self._reset_stats()
 
-    def merge_ext_data(self, data, ext_data):
+    def _reset_stats(self):
+        self.stats = {
+            "calls": 0,
+            "glued": 0,
+            "parts": 0,
+            "reject_length": 0,
+            "reject_width": 0,
+            "reject_ctc": 0,
+        }
+
+    def _log_stats(self):
+        from ppocr.utils.logging import get_logger
+
+        st = self.stats
+        get_logger().info(
+            "RecConAug: {:.1%} of {} samples concatenated, {:.2f} extra parts on "
+            "average; rejected by length {}, width {}, ctc {}".format(
+                st["glued"] / st["calls"],
+                st["calls"],
+                st["parts"] / max(1, st["glued"]),
+                st["reject_length"],
+                st["reject_width"],
+                st["reject_ctc"],
+            )
+        )
+        self._reset_stats()
+
+    @staticmethod
+    def ctc_min_steps(label):
+        """CTC needs one step per char plus a blank between repeated chars."""
+        return len(label) + sum(a == b for a, b in zip(label, label[1:]))
+
+    def _limits(self, data):
+        """(max w/h ratio of the result, max CTC steps or None) for this sample."""
+        max_wh_ratio = self.max_wh_ratio
+        max_steps = None
+        batch_shape = data.get("batch_shape") if self.fit_batch_width else None
+        if batch_shape is not None:
+            batch_h, batch_w = batch_shape
+            max_wh_ratio = min(max_wh_ratio, batch_w / batch_h)
+            if self.ctc_stride:
+                max_steps = batch_w // self.ctc_stride
+        if self.max_ratio_jitter:
+            max_wh_ratio = random.uniform(min(1.0, max_wh_ratio), max_wh_ratio)
+        return max_wh_ratio, max_steps
+
+    @staticmethod
+    def _background(left, right):
+        """Median colour of the edge columns facing the gap (light or dark bg)."""
+        edges = np.concatenate([left[:, -2:], right[:, :2]], axis=1)
+        if edges.size == 0:
+            return 127
+        return np.median(edges.reshape((-1,) + left.shape[2:]), axis=0)
+
+    def merge_ext_data(self, data, ext_data, gap_w=0):
         ori_w = round(
             data["image"].shape[1] / data["image"].shape[0] * self.image_shape[0]
         )
@@ -171,24 +278,61 @@ class RecConAug(object):
         )
         data["image"] = cv2.resize(data["image"], (ori_w, self.image_shape[0]))
         ext_data["image"] = cv2.resize(ext_data["image"], (ext_w, self.image_shape[0]))
-        data["image"] = np.concatenate([data["image"], ext_data["image"]], axis=1)
-        data["label"] += ext_data["label"]
+        parts = [data["image"]]
+        if gap_w > 0:
+            left, right = data["image"], ext_data["image"]
+            gap = np.empty((left.shape[0], gap_w) + left.shape[2:], dtype=left.dtype)
+            gap[...] = self._background(left, right)
+            parts.append(gap)
+        parts.append(ext_data["image"])
+        data["image"] = np.concatenate(parts, axis=1)
+        data["label"] += (" " if self.add_space else "") + ext_data["label"]
         return data
 
     def __call__(self, data):
+        self.stats["calls"] += 1
+        data = self._concat(data)
+        if self.log_every and self.stats["calls"] >= self.log_every:
+            self._log_stats()
+        return data
+
+    def _concat(self, data):
         rnd_num = random.random()
         if rnd_num > self.prob:
             return data
+        max_wh_ratio, max_steps = self._limits(data)
+        sep = " " if self.add_space else ""
+        parts = 0
         for idx, ext_data in enumerate(data["ext_data"]):
-            if len(data["label"]) + len(ext_data["label"]) > self.max_text_length:
+            new_label = data["label"] + sep + ext_data["label"]
+            if len(new_label) > self.max_text_length:
+                self.stats["reject_length"] += 1
+                if self.skip_unfit:
+                    continue
                 break
+            if max_steps is not None and self.ctc_min_steps(new_label) > max_steps:
+                self.stats["reject_ctc"] += 1
+                if self.skip_unfit:
+                    continue
+                break
+            if self.ext_aug is not None:
+                ext_data = self.ext_aug(ext_data)
+            gap_w = random.randint(*self.space_width_range) if self.add_space else 0
             concat_ratio = (
                 data["image"].shape[1] / data["image"].shape[0]
                 + ext_data["image"].shape[1] / ext_data["image"].shape[0]
+                + gap_w / self.image_shape[0]
             )
-            if concat_ratio > self.max_wh_ratio:
+            if concat_ratio > max_wh_ratio:
+                self.stats["reject_width"] += 1
+                if self.skip_unfit:
+                    continue
                 break
-            data = self.merge_ext_data(data, ext_data)
+            data = self.merge_ext_data(data, ext_data, gap_w)
+            parts += 1
+        if parts:
+            self.stats["glued"] += 1
+            self.stats["parts"] += parts
         data.pop("ext_data")
         return data
 
