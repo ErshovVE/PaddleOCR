@@ -1,6 +1,6 @@
 # RU+EN document text recognition on PP-OCRv6 small.
 # Differences from configs/rec/PP-OCRv6/PP-OCRv6_small_rec.yml (see RU_TRAINING_NOTES.md):
-#   * own dictionary (ru_dict_ext011026 = ru_dict_ext100124 + "°", "—"; 164 chars + space), max_text_length 200;
+#   * own dictionary (ru_dict_ext011026 = ru_dict_ext100124 + "°", "—"; 164 chars + space), max_text_length 250;
 #   * Backbone.train_seq_len: -1 -> CTC length grows with width at train time (long lines fit);
 #   * MultiScaleSampler: max_w 1600, half of the batches sorted by w/h, padded to the longest image;
 #   * RecConAug with a gap + space between glued words, TIA with capped vertical shift;
@@ -23,7 +23,7 @@ Global:
   use_visualdl: false
   infer_img: doc/imgs_words/ch/word_1.jpg
   character_dict_path: ru_ocr/dict/ru_dict_ext011026.txt
-  max_text_length: &max_text_length 200
+  max_text_length: &max_text_length 250
   infer_mode: false
   use_space_char: true
   distributed: true
