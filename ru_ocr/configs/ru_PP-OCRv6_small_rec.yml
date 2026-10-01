@@ -1,0 +1,186 @@
+# RU+EN document text recognition on PP-OCRv6 small.
+# Differences from configs/rec/PP-OCRv6/PP-OCRv6_small_rec.yml (see RU_TRAINING_NOTES.md):
+#   * own dictionary (ru_dict_ext011026 = ru_dict_ext100124 + "°", "—"; 164 chars + space), max_text_length 200;
+#   * Backbone.train_seq_len: -1 -> CTC length grows with width at train time (long lines fit);
+#   * MultiScaleSampler: max_w 1600, half of the batches sorted by w/h, padded to the longest image;
+#   * RecConAug with a gap + space between glued words, TIA with capped vertical shift;
+#   * Eval through MultiScaleSampler (each batch at its own aspect ratio, like inference)
+#     and metrics per label-length bucket.
+Global:
+  model_name: PP-OCRv6_small_rec
+  debug: false
+  use_gpu: true
+  epoch_num: 20
+  log_smooth_window: 20
+  print_batch_step: 100
+  save_model_dir: ./output/ru_PP-OCRv6_small_rec
+  save_epoch_step: 1
+  eval_batch_step: [0, 5000]
+  cal_metric_during_train: true
+  pretrained_model: ./pretrain/PP-OCRv6_small_rec_pretrained.pdparams
+  checkpoints:
+  save_inference_dir:
+  use_visualdl: false
+  infer_img: doc/imgs_words/ch/word_1.jpg
+  character_dict_path: ru_ocr/dict/ru_dict_ext011026.txt
+  max_text_length: &max_text_length 200
+  infer_mode: false
+  use_space_char: true
+  distributed: true
+  save_res_path: ./output/rec/predicts_ru_PP-OCRv6_small.txt
+  d2s_train_image_shape: [3, 48, 320]
+
+
+Optimizer:
+  name: Adam
+  beta1: 0.9
+  beta2: 0.999
+  lr:
+    name: Cosine
+    learning_rate: 0.0005
+    warmup_epoch: 1
+  regularizer:
+    name: L2
+    factor: 3.0e-05
+
+
+Architecture:
+  model_type: rec
+  algorithm: SVTR_LCNet
+  Transform:
+  Backbone:
+    name: PPLCNetV4
+    model_size: small
+    train_seq_len: -1
+  Head:
+    name: MultiHead
+    head_list:
+      - CTCHead:
+          Neck:
+            name: lightsvtr
+            dims: 120
+            depth: 2
+            mlp_ratio: 2.0
+            local_kernel: 7
+          Head:
+            fc_decay: 0.00001
+      - NRTRHead:
+          nrtr_dim: 384
+          max_text_length: *max_text_length
+
+Loss:
+  name: MultiLoss
+  loss_config_list:
+    - CTCLoss:
+    - NRTRLoss:
+
+PostProcess:
+  name: CTCLabelDecode
+
+Metric:
+  name: RecMetric
+  main_indicator: acc
+  ignore_space: false
+  length_buckets: [15, 40, 60]
+
+Train:
+  dataset:
+    name: MultiScaleDataSet
+    ds_width: true
+    data_dir: ./train_big/
+    ext_op_transform_idx: 1
+    label_file_list:
+    - ./train_big/all_real_clear_train_1000000_w_h.txt
+    - ./train_big_handwritten/handwritten_all_real_clear_train_150000_w_h.txt
+    transforms:
+    - DecodeImage:
+        img_mode: BGR
+        channel_first: false
+    - RecAug:
+        reverse_prob: 0.0
+        tia_max_vertical_ratio: 0.25
+    - RecConAug:
+        prob: 0.7
+        ext_data_num: 10
+        image_shape: [48, 2560, 3]
+        max_text_length: *max_text_length
+        add_space: true
+        space_width_range: [16, 80]
+        max_ratio_jitter: true
+        fit_batch_width: true  # never wider than the batch (no squeezing)
+        ctc_stride: 8          # label must fit into batch_width / 8 CTC steps
+        skip_unfit: true       # try the next candidate instead of stopping
+        log_every: 20000       # concatenation stats per dataloader worker
+        ext_aug:
+          reverse_prob: 0.0
+          tia_max_vertical_ratio: 0.25
+    - RecAug:
+        tia_prob: 0.0
+        crop_prob: 0.1
+        reverse_prob: 0.01
+        noise_prob: 0.1
+        jitter_prob: 0.1
+        blur_prob: 0.1
+        hsv_aug_prob: 0.1
+    - MultiLabelEncode:
+        gtc_encode: NRTRLabelEncode
+    - KeepKeys:
+        keep_keys:
+        - image
+        - label_ctc
+        - label_gtc
+        - length
+        - valid_ratio
+  sampler:
+    name: MultiScaleSampler
+    scales: [[320, 32], [320, 48], [320, 64]]
+    # batch size is per scale for the base 320x32 area; wide batches (max_w 1600)
+    # take far more memory -> lower first_bs if the GPU runs out of memory
+    first_bs: &bs 64
+    fix_bs: false
+    divided_factor: [8, 16]
+    is_training: true
+    max_w: 1600
+    sorted_batch_ratio: 0.5
+    pad_to_longest: true
+  loader:
+    shuffle: true
+    batch_size_per_card: *bs
+    drop_last: true
+    num_workers: 8
+
+Eval:
+  dataset:
+    name: MultiScaleDataSet
+    ds_width: true
+    data_dir: ./train_big/
+    label_file_list:
+    - ./train_big/all_real_clear_valid_w_h.txt
+    # validation split of the handwritten set (the old config evaluated on its train file)
+    - ./train_big_handwritten/handwritten_all_real_clear_valid_w_h.txt
+    transforms:
+    - DecodeImage:
+        img_mode: BGR
+        channel_first: false
+    - MultiLabelEncode:
+        gtc_encode: NRTRLabelEncode
+    - KeepKeys:
+        keep_keys:
+        - image
+        - label_ctc
+        - label_gtc
+        - length
+        - valid_ratio
+  sampler:
+    name: MultiScaleSampler
+    scales: [[320, 48]]  # height 48 only: inference pooling needs feature height 3
+    first_bs: 32
+    fix_bs: true
+    is_training: false
+    max_w: 2400
+    pad_to_longest: true
+  loader:
+    shuffle: false
+    drop_last: false
+    batch_size_per_card: 32
+    num_workers: 4
