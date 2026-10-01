@@ -38,6 +38,30 @@ def setup_orderdict():
     yaml.add_representer(OrderedDict, represent_dictionary_order)
 
 
+REC_RESIZE_OPS = ("RecResizeImg", "SVTRRecResizeImg", "RobustScannerRecResizeImg")
+
+
+def infer_preprocess_ops(config):
+    """Eval transforms written to inference.yml as PreProcess.
+
+    Recognition Eval through MultiScaleSampler resizes images in the dataset
+    (each batch at its own aspect ratio), so its transforms have no resize op,
+    while inference (PaddleX) needs RecResizeImg to know the input height.
+    Add it with the first sampler scale ([w, h]) in that case.
+    """
+    eval_cfg = config["Eval"]
+    ops = copy.deepcopy(eval_cfg["dataset"]["transforms"])
+    if config["Architecture"].get("model_type") != "rec" or "sampler" not in eval_cfg:
+        return ops
+    if any(name in op for op in ops for name in REC_RESIZE_OPS):
+        return ops
+    scale = eval_cfg["sampler"]["scales"][0]
+    width, height = (scale, scale) if isinstance(scale, int) else scale[:2]
+    resize = {"RecResizeImg": {"image_shape": [3, height, width]}}
+    keep_idx = next((i for i, op in enumerate(ops) if "KeepKeys" in op), len(ops))
+    return ops[:keep_idx] + [resize] + ops[keep_idx:]
+
+
 def dump_infer_config(config, path, logger):
     setup_orderdict()
     infer_cfg = OrderedDict()
@@ -107,7 +131,7 @@ def dump_infer_config(config, path, logger):
         if common_dynamic_shapes:
             infer_cfg["Hpi"] = hpi_config
 
-    infer_cfg["PreProcess"] = {"transform_ops": config["Eval"]["dataset"]["transforms"]}
+    infer_cfg["PreProcess"] = {"transform_ops": infer_preprocess_ops(config)}
     postprocess = OrderedDict()
     for k, v in config["PostProcess"].items():
         if config["Architecture"].get("algorithm") in [
