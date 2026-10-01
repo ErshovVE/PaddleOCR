@@ -495,19 +495,25 @@ class MultiScaleDataSet(SimpleDataSet):
         return data
 
     def __getitem__(self, properties):
-        # properties is a tuple, contains (width, height, index)
+        # properties is a tuple: (width, height, index[, wh_ratio[, is_sorted]]).
+        # is_sorted tells whether index is a position in the ratio-sorted order;
+        # without it, a given wh_ratio implies a sorted index (legacy tuples).
         img_height = properties[1]
         idx = properties[2]
-        if self.ds_width and properties[3] is not None:
-            wh_ratio = properties[3]
+        wh_ratio = properties[3] if len(properties) > 3 else None
+        is_sorted = properties[4] if len(properties) > 4 else wh_ratio is not None
+        if self.ds_width and wh_ratio is not None:
             img_width = img_height * (
                 1 if int(round(wh_ratio)) == 0 else int(round(wh_ratio))
             )
+        else:
+            img_width = properties[0]
+            wh_ratio = None
+        if self.ds_width and is_sorted:
             file_idx = self.wh_ratio_sort[idx]
         else:
             file_idx = self.data_idx_order_list[idx]
-            img_width = properties[0]
-            wh_ratio = None
+            is_sorted = False
 
         data_line = self.data_lines[file_idx]
         try:
@@ -540,5 +546,7 @@ class MultiScaleDataSet(SimpleDataSet):
         if outs is None:
             # during evaluation, we should fix the idx to get same results for many times of evaluation.
             rnd_idx = (idx + 1) % self.__len__()
-            return self.__getitem__([img_width, img_height, rnd_idx, wh_ratio])
+            return self.__getitem__(
+                [img_width, img_height, rnd_idx, wh_ratio, is_sorted]
+            )
         return outs

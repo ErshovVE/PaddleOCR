@@ -115,19 +115,19 @@ def build_dataloader(config, mode, device, logger, seed=None):
     else:
         use_shared_memory = True
 
-    if mode == "Train":
+    if "sampler" in config[mode]:
+        # custom batch sampler, e.g. MultiScaleSampler (Train or Eval)
+        config_sampler = config[mode]["sampler"]
+        sampler_name = config_sampler.pop("name")
+        batch_sampler = eval(sampler_name)(dataset, **config_sampler)
+    elif mode == "Train":
         # Distribute data to multiple cards
-        if "sampler" in config[mode]:
-            config_sampler = config[mode]["sampler"]
-            sampler_name = config_sampler.pop("name")
-            batch_sampler = eval(sampler_name)(dataset, **config_sampler)
-        else:
-            batch_sampler = DistributedBatchSampler(
-                dataset=dataset,
-                batch_size=batch_size,
-                shuffle=shuffle,
-                drop_last=drop_last,
-            )
+        batch_sampler = DistributedBatchSampler(
+            dataset=dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            drop_last=drop_last,
+        )
     else:
         # Distribute data to single card
         batch_sampler = BatchSampler(

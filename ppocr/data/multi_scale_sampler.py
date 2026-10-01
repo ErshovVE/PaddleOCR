@@ -18,6 +18,8 @@ class MultiScaleSampler(Sampler):
         ratio_wh=0.8,
         max_w=480.0,
         seed=None,
+        sorted_batch_ratio=1.0,
+        pad_to_longest=False,
     ):
         """
         multi scale samper
@@ -26,8 +28,23 @@ class MultiScaleSampler(Sampler):
             scales(list): several scales for image resolution
             first_bs(int): batch size for the first scale in scales
             divided_factor(list[w, h]): ImageNet models down-sample images by a factor, ensure that width and height dimensions are multiples are multiple of devided_factor.
-            is_training(boolean): mode
+            is_training(boolean): mode. When False (e.g. in Eval) the data is not
+                split between cards, every card sees the whole dataset.
+            max_w(float): upper bound of the batch width when ds_width is True.
+            sorted_batch_ratio(float): only with ds_width. Share of batches made of
+                images with similar aspect ratio (sorted by w/h); the rest are
+                made of randomly shuffled images. 1.0 keeps the legacy behaviour
+                (all batches sorted). Batches are re-drawn every epoch when < 1.0.
+            pad_to_longest(bool): only with ds_width. Batch width follows the
+                widest image of the batch (capped by max_w) instead of the mean
+                ratio, so long lines are not squeezed. Shuffled batches then get
+                their own width too instead of the fixed scale width. The dataset
+                rounds the ratio, so the widest image may still be squeezed by
+                less than one image height.
         """
+        assert (
+            0.0 <= sorted_batch_ratio <= 1.0
+        ), "sorted_batch_ratio must be in [0, 1], got {}".format(sorted_batch_ratio)
         # min. and max. spatial dimensions
         self.data_source = data_source
         self.data_idx_order_list = np.array(data_source.data_idx_order_list)
@@ -37,8 +54,18 @@ class MultiScaleSampler(Sampler):
             self.wh_ratio = data_source.wh_ratio
             self.wh_ratio_sort = data_source.wh_ratio_sort
         self.n_data_samples = len(self.data_source)
+        assert sorted_batch_ratio == 1.0 or self.ds_width, (
+            "sorted_batch_ratio < 1 requires dataset ds_width: true "
+            "(batches are sorted by width/height ratio)"
+        )
         self.ratio_wh = ratio_wh
         self.max_w = max_w
+        self.sorted_batch_ratio = sorted_batch_ratio
+        self.pad_to_longest = pad_to_longest
+        self._mix_epoch = 0
+        if self.ds_width:
+            # position of every image in the ratio-sorted order
+            self.sort_pos = np.argsort(self.wh_ratio_sort)
 
         if isinstance(scales[0], list):
             width_dims = [i[0] for i in scales]
@@ -51,8 +78,11 @@ class MultiScaleSampler(Sampler):
         base_batch_size = first_bs
 
         # Get the GPU and node related information
-        num_replicas = dist.get_world_size()
-        rank = dist.get_rank()
+        if is_training:
+            num_replicas = dist.get_world_size()
+            rank = dist.get_rank()
+        else:
+            num_replicas, rank = 1, 0
         # adjust the total samples to avoid batch dropping
         num_samples_per_replica = int(self.n_data_samples * 1.0 / num_replicas)
 
@@ -111,16 +141,25 @@ class MultiScaleSampler(Sampler):
         self.batchs_in_one_epoch_id = [i for i in range(len(self.batchs_in_one_epoch))]
 
     def __iter__(self):
+        if self.sorted_batch_ratio < 1.0 and self.shuffle:
+            # new mix of sorted / shuffled batches every training epoch
+            self._mix_epoch += 1
+            self.batchs_in_one_epoch = self.iter()
         if self.seed is None:
             random.seed(self.epoch)
             self.epoch += 1
         else:
             random.seed(self.seed)
-        random.shuffle(self.batchs_in_one_epoch_id)
+        if self.shuffle:
+            # evaluation (is_training=False) keeps a fixed batch order, so it
+            # sees the same batches every time (Windows skips the last one)
+            random.shuffle(self.batchs_in_one_epoch_id)
         for batch_tuple_id in self.batchs_in_one_epoch_id:
             yield self.batchs_in_one_epoch[batch_tuple_id]
 
     def iter(self):
+        if self.ds_width and self.sorted_batch_ratio < 1.0 and self.shuffle:
+            return self._iter_mixed()
         if self.shuffle:
             if self.seed is not None:
                 random.seed(self.seed)
@@ -144,24 +183,79 @@ class MultiScaleSampler(Sampler):
             end_index = min(start_index + curr_bsz, self.n_samples_per_replica)
             batch_ids = indices_rank_i[start_index:end_index]
             n_batch_samples = len(batch_ids)
-            if n_batch_samples != curr_bsz:
+            if n_batch_samples != curr_bsz and self.shuffle:
+                # training fills the last batch up; evaluation keeps it short so
+                # that no sample is counted twice
                 batch_ids += indices_rank_i[: (curr_bsz - n_batch_samples)]
             start_index += curr_bsz
 
             if len(batch_ids) > 0:
                 if self.ds_width:
                     wh_ratio_current = self.wh_ratio[self.wh_ratio_sort[batch_ids]]
-                    ratio_current = wh_ratio_current.mean()
-                    ratio_current = (
-                        ratio_current
-                        if ratio_current * curr_h < self.max_w
-                        else self.max_w / curr_h
-                    )
+                    ratio_current = self._batch_ratio(wh_ratio_current, curr_h)
                 else:
                     ratio_current = None
                 batch = [(curr_w, curr_h, b_id, ratio_current) for b_id in batch_ids]
                 # yield batch
                 batchs_in_one_epoch.append(batch)
+        return batchs_in_one_epoch
+
+    def _batch_ratio(self, wh_ratios, curr_h):
+        ratio = wh_ratios.max() if self.pad_to_longest else wh_ratios.mean()
+        return ratio if ratio * curr_h < self.max_w else self.max_w / curr_h
+
+    def _iter_mixed(self):
+        """Batches of two kinds: sorted by w/h ratio and randomly shuffled.
+
+        Every image is used once per epoch: a shuffled permutation is split, its
+        head feeds the shuffled batches and the tail, sorted by ratio, feeds the
+        sorted ones. Tuples are (w, h, idx, ratio, is_sorted): sorted batches
+        pass the position in the ratio-sorted order, shuffled ones the index in
+        data_idx_order_list.
+        """
+        seed = (0 if self.seed is None else self.seed) + self._mix_epoch
+        rng = random.Random(seed)
+        # batch_list is shuffled differently on every rank; a canonical order
+        # makes all ranks draw the same split (the batch order is shuffled
+        # later in __iter__ anyway)
+        batch_list = sorted(self.batch_list)
+        use_sorted = [rng.random() < self.sorted_batch_ratio for _ in batch_list]
+        n_shuffled = sum(
+            bsz for (_, _, bsz), flag in zip(batch_list, use_sorted) if not flag
+        )
+        n_shuffled = min(n_shuffled * self.num_replicas, len(self.img_indices))
+        perm = list(self.img_indices)
+        rng.shuffle(perm)
+        streams = {
+            False: perm[:n_shuffled][self.rank :: self.num_replicas],
+            True: sorted(int(self.sort_pos[i]) for i in perm[n_shuffled:])[
+                self.rank :: self.num_replicas
+            ],
+        }
+        starts = {False: 0, True: 0}
+
+        batchs_in_one_epoch = []
+        for (curr_w, curr_h, curr_bsz), is_sorted in zip(batch_list, use_sorted):
+            if not streams[is_sorted]:
+                # tiny dataset: one kind of batch got no images at all
+                is_sorted = not is_sorted
+            stream, start = streams[is_sorted], starts[is_sorted]
+            batch_ids = stream[start : start + curr_bsz]
+            if len(batch_ids) < curr_bsz:
+                # stream exhausted: fill up from its own start, as legacy does
+                batch_ids += stream[: curr_bsz - len(batch_ids)]
+            starts[is_sorted] = start + curr_bsz
+            if is_sorted:
+                file_ids = self.wh_ratio_sort[batch_ids]
+                ratio = self._batch_ratio(self.wh_ratio[file_ids], curr_h)
+            elif self.pad_to_longest:
+                file_ids = self.data_idx_order_list[batch_ids]
+                ratio = self._batch_ratio(self.wh_ratio[file_ids], curr_h)
+            else:
+                ratio = None
+            batchs_in_one_epoch.append(
+                [(curr_w, curr_h, b_id, ratio, is_sorted) for b_id in batch_ids]
+            )
         return batchs_in_one_epoch
 
     def set_epoch(self, epoch: int):
