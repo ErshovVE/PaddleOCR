@@ -444,25 +444,63 @@ class SimpleDataSet(Dataset):
 
 
 class MultiScaleDataSet(SimpleDataSet):
+    """SimpleDataSet whose items are resized to the size chosen by MultiScaleSampler.
+
+    With ratio_list < 1 the dataset indices are virtual: index v of the current
+    epoch is label line _index_map[v] (see SimpleDataSet). wh_ratio,
+    wh_ratio_sort and data_idx_order_list follow that per-epoch sample;
+    wh_version changes whenever they are rebuilt, so the sampler can re-plan.
+    """
+
     def __init__(self, config, mode, logger, seed=None):
         super(MultiScaleDataSet, self).__init__(config, mode, logger, seed)
         self.ds_width = config[mode]["dataset"].get("ds_width", False)
+        self.wh_version = 0
+        self._wh_epoch = None
         if self.ds_width:
             self.wh_aware()
 
     def wh_aware(self):
-        data_line_new = []
+        # w/h of every label line (with ratio_list: every line of every file)
         wh_ratio = []
         for line in self.data_lines:
-            data_line_new.append(line)
             line = line.decode("utf-8")
             name, label, w, h = line.strip("\n").split(self.delimiter)
             wh_ratio.append(float(w) / float(h))
+        self._line_wh_ratio = np.array(wh_ratio)
+        self._sync_wh_to_epoch()
 
-        self.data_lines = data_line_new
-        self.wh_ratio = np.array(wh_ratio)
+    def _sync_wh_to_epoch(self):
+        """wh_ratio / wh_ratio_sort over the dataset indices of the current epoch."""
+        if self._index_map is None:
+            self.wh_ratio = self._line_wh_ratio
+            self.data_idx_order_list = list(range(len(self.data_lines)))
+        else:
+            self.wh_ratio = self._line_wh_ratio[np.asarray(self._index_map, dtype=int)]
+            self.data_idx_order_list = list(range(len(self._index_map)))
         self.wh_ratio_sort = np.argsort(self.wh_ratio)
-        self.data_idx_order_list = list(range(len(self.data_lines)))
+        self._wh_epoch = self._cached_epoch
+        self.wh_version += 1
+
+    def _ensure_index_map(self):
+        # dataloader workers rebuild the epoch sample lazily; keep w/h in step
+        super(MultiScaleDataSet, self)._ensure_index_map()
+        if self.ds_width and self._wh_epoch != self._cached_epoch:
+            self._sync_wh_to_epoch()
+
+    def reset_data_lines(self, seed=None, epoch=None):
+        super(MultiScaleDataSet, self).reset_data_lines(seed=seed, epoch=epoch)
+        if self.ds_width:
+            if self._all_lines is None:
+                self.wh_aware()  # lines were re-read
+            else:
+                self._sync_wh_to_epoch()
+
+    def _line_at(self, idx):
+        """Label line of dataset index idx (virtual index with ratio_list)."""
+        if self._index_map is not None:
+            return self._all_lines[self._index_map[idx]]
+        return self.data_lines[idx]
 
     def resize_norm_img(self, data, imgW, imgH, padding=True):
         img = data["image"]
@@ -500,6 +538,8 @@ class MultiScaleDataSet(SimpleDataSet):
         # without it, a given wh_ratio implies a sorted index (legacy tuples).
         img_height = properties[1]
         idx = properties[2]
+        if self._index_map is not None:
+            self._ensure_index_map()
         wh_ratio = properties[3] if len(properties) > 3 else None
         is_sorted = properties[4] if len(properties) > 4 else wh_ratio is not None
         if self.ds_width and wh_ratio is not None:
@@ -515,7 +555,7 @@ class MultiScaleDataSet(SimpleDataSet):
             file_idx = self.data_idx_order_list[idx]
             is_sorted = False
 
-        data_line = self.data_lines[file_idx]
+        data_line = self._line_at(file_idx)
         try:
             data_line = data_line.decode("utf-8")
             substr = data_line.strip("\n").split(self.delimiter)

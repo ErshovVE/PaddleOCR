@@ -21,7 +21,7 @@ import pytest
 
 from ppocr.data import build_dataloader
 from ppocr.data.multi_scale_sampler import MultiScaleSampler
-from ppocr.data.simple_dataset import MultiScaleDataSet
+from ppocr.data.simple_dataset import MultiScaleDataSet, SimpleDataSet
 
 np.random.seed(42)
 random.seed(42)
@@ -311,3 +311,140 @@ def test_build_dataloader_eval_with_sampler(label_file):
     assert len(widths) == 3
     # ratio-sorted batches in a fixed order, each as wide as its longest image
     assert widths == [48 * 2, 48 * 10, 48 * 31]
+
+
+# ---------------------------------------------------------------------------
+# ratio_list (per-epoch subsampling of label files) with MultiScaleDataSet
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def two_files(tmp_path):
+    """File A: 40 narrow lines (w/h 1-10), file B: 40 wide lines (w/h 20-40)."""
+    rng = random.Random(0)
+    paths = {}
+    for name, (lo, hi) in {"A": (1, 10), "B": (20, 40)}.items():
+        lines = []
+        for i in range(40):
+            w, h = int(rng.uniform(lo, hi) * 16), 16
+            fn = "{}_{}.png".format(name, i)
+            cv2.imwrite(str(tmp_path / fn), np.full((h, w, 3), 255, np.uint8))
+            lines.append("{}\t{}_{}\t{}\t{}".format(fn, name, i, w, h))
+        path = tmp_path / "{}.txt".format(name)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        paths[name] = str(path)
+    return tmp_path, paths
+
+
+def _ratio_config(two_files, ratio_list, ds_width, name="MultiScaleDataSet"):
+    data_dir, paths = two_files
+    return {
+        "Global": {},
+        "Train": {
+            "dataset": {
+                "name": name,
+                "ds_width": ds_width,
+                "data_dir": str(data_dir),
+                "label_file_list": [paths["A"], paths["B"]],
+                "ratio_list": ratio_list,
+                "transforms": [
+                    {"DecodeImage": {"img_mode": "BGR", "channel_first": False}},
+                    {"KeepKeys": {"keep_keys": ["label"]}},
+                ],
+            },
+            "loader": {
+                "shuffle": True,
+                "drop_last": False,
+                "batch_size_per_card": 8,
+                "num_workers": 0,
+            },
+        },
+    }
+
+
+def _epoch_labels(ds, sampler):
+    return [ds[item][0] for batch in sampler for item in batch]
+
+
+def _by_file(labels):
+    return {f: sum(l.startswith(f) for l in labels) for f in ("A", "B")}
+
+
+class TestRatioList:
+    @pytest.mark.parametrize("ds_width", [False, True])
+    @pytest.mark.parametrize(
+        "ratio_list,expected", [([1.0, 0.5], (40, 20)), ([0.5, 1.0], (20, 40))]
+    )
+    def test_same_sample_as_simple_dataset(
+        self, two_files, ds_width, ratio_list, expected
+    ):
+        ms = MultiScaleDataSet(
+            _ratio_config(two_files, ratio_list, ds_width), "Train", LOGGER, seed=0
+        )
+        simple = SimpleDataSet(
+            _ratio_config(two_files, ratio_list, False, "SimpleDataSet"),
+            "Train",
+            LOGGER,
+            seed=0,
+        )
+        sampler = MultiScaleSampler(
+            ms, scales=[[320, 16]], first_bs=4, fix_bs=True, max_w=2000, seed=0
+        )
+        labels = _epoch_labels(ms, sampler)
+        assert _by_file(labels) == {"A": expected[0], "B": expected[1]}
+        reference = {simple[i][0] for i in range(len(simple))}
+        assert set(labels) == reference
+
+    @pytest.mark.parametrize("ds_width", [False, True])
+    def test_sample_changes_every_epoch(self, two_files, ds_width):
+        ds = MultiScaleDataSet(
+            _ratio_config(two_files, [1.0, 0.5], ds_width), "Train", LOGGER, seed=0
+        )
+        sampler = MultiScaleSampler(
+            ds, scales=[[320, 16]], first_bs=4, fix_bs=True, max_w=2000, seed=0
+        )
+        first = {l for l in _epoch_labels(ds, sampler) if l.startswith("B")}
+        ds.reset_data_lines(seed=1, epoch=1)  # what tools/program.py does
+        second = {l for l in _epoch_labels(ds, sampler) if l.startswith("B")}
+        assert len(first) == len(second) == 20
+        assert first != second
+
+    def test_sorted_batches_follow_epoch_sample(self, two_files):
+        ds = MultiScaleDataSet(
+            _ratio_config(two_files, [0.5, 0.5], True), "Train", LOGGER, seed=0
+        )
+        sampler = MultiScaleSampler(
+            ds, scales=[[320, 16]], first_bs=4, fix_bs=True, max_w=2000, seed=0
+        )
+        ds.reset_data_lines(seed=3, epoch=3)
+        sampled = {
+            ds._all_lines[g].decode("utf-8").split("\t")[1] for g in ds._index_map
+        }
+        seen = []
+        for batch in sampler:
+            assert all(item[4] if len(item) > 4 else True for item in batch)
+            ratios = [ds.wh_ratio[ds.wh_ratio_sort[item[2]]] for item in batch]
+            assert ratios == sorted(ratios)
+            seen += [ds[item][0] for item in batch]
+        assert set(seen) == sampled
+
+    def test_worker_copy_serves_same_lines(self, two_files):
+        main = MultiScaleDataSet(
+            _ratio_config(two_files, [1.0, 0.5], True), "Train", LOGGER, seed=0
+        )
+        worker = MultiScaleDataSet(
+            _ratio_config(two_files, [1.0, 0.5], True), "Train", LOGGER, seed=0
+        )
+        main.reset_data_lines(seed=2, epoch=2)
+        worker._shared_epoch.value = 2  # a worker only sees the shared epoch
+        for pos in range(len(main)):
+            item = (320, 16, pos, 10.0, True)
+            assert worker[item][0] == main[item][0]
+
+    def test_without_ratio_list_unchanged(self, two_files):
+        ds = MultiScaleDataSet(
+            _ratio_config(two_files, [1.0, 1.0], True), "Train", LOGGER, seed=0
+        )
+        assert ds._index_map is None and len(ds) == 80
+        assert ds.wh_version == 1
+        np.testing.assert_array_equal(ds.wh_ratio_sort, np.argsort(ds.wh_ratio))

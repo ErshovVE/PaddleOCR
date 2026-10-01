@@ -51,8 +51,7 @@ class MultiScaleSampler(Sampler):
         self.ds_width = data_source.ds_width
         self.seed = data_source.seed
         if self.ds_width:
-            self.wh_ratio = data_source.wh_ratio
-            self.wh_ratio_sort = data_source.wh_ratio_sort
+            self._sync_wh()
         self.n_data_samples = len(self.data_source)
         assert sorted_batch_ratio == 1.0 or self.ds_width, (
             "sorted_batch_ratio < 1 requires dataset ds_width: true "
@@ -63,9 +62,6 @@ class MultiScaleSampler(Sampler):
         self.sorted_batch_ratio = sorted_batch_ratio
         self.pad_to_longest = pad_to_longest
         self._mix_epoch = 0
-        if self.ds_width:
-            # position of every image in the ratio-sorted order
-            self.sort_pos = np.argsort(self.wh_ratio_sort)
 
         if isinstance(scales[0], list):
             width_dims = [i[0] for i in scales]
@@ -140,10 +136,26 @@ class MultiScaleSampler(Sampler):
         self.batchs_in_one_epoch = self.iter()
         self.batchs_in_one_epoch_id = [i for i in range(len(self.batchs_in_one_epoch))]
 
+    def _sync_wh(self):
+        """Take w/h of the dataset's current epoch (it changes with ratio_list)."""
+        self.wh_ratio = self.data_source.wh_ratio
+        self.wh_ratio_sort = self.data_source.wh_ratio_sort
+        # position of every image in the ratio-sorted order
+        self.sort_pos = np.argsort(self.wh_ratio_sort)
+        self._wh_version = getattr(self.data_source, "wh_version", 0)
+
     def __iter__(self):
+        wh_changed = self.ds_width and self._wh_version != getattr(
+            self.data_source, "wh_version", 0
+        )
+        if wh_changed:
+            # new per-epoch sample of the dataset (ratio_list < 1): re-plan batches
+            self._sync_wh()
         if self.sorted_batch_ratio < 1.0 and self.shuffle:
             # new mix of sorted / shuffled batches every training epoch
             self._mix_epoch += 1
+            self.batchs_in_one_epoch = self.iter()
+        elif wh_changed:
             self.batchs_in_one_epoch = self.iter()
         if self.seed is None:
             random.seed(self.epoch)
