@@ -939,6 +939,80 @@ python3 -m paddle.distributed.launch --gpus '0,1,2,3'  tools/train.py -c configs
         -o Global.pretrained_model=./PP-OCRv5_server_rec_pretrained.pdparams
 ```
 
+#### 4.2.1 Training on Long Text Lines (Optional)
+
+By default the `PPLCNetV3`/`PPLCNetV4`/`PPHGNetV2` recognition backbones pool the features to a fixed 40 CTC
+steps at training time, while inference uses `W / 8` steps. Labels that need more than 40 steps (lines of
+roughly 35+ characters) get a zero CTC loss and are silently ignored. If your data contains long lines
+(whole document lines rather than words), the following optional keys help. All of them are off by
+default; without them training behaves exactly as before.
+
+```yaml
+Architecture:
+  Backbone:
+    name: PPLCNetV4
+    model_size: small
+    train_seq_len: -1          # CTC length W / 8 at training time, the same as inference
+
+Metric:
+  name: RecMetric
+  main_indicator: acc
+  length_buckets: [15, 40, 60] # adds acc_len_0_15, acc_len_16_40, ... to the logs
+
+Train:
+  dataset:
+    name: MultiScaleDataSet
+    ds_width: true             # label files with 4 columns: path, text, width, height
+    transforms:
+    - DecodeImage: {img_mode: BGR, channel_first: false}
+    - RecAug:
+        tia_max_vertical_ratio: 0.25  # cap the vertical TIA shift on wide images
+    - RecConAug:
+        prob: 0.5
+        ext_data_num: 10
+        image_shape: [48, 2560, 3]
+        max_text_length: *max_text_length
+        add_space: true        # gap + space between concatenated words
+        fit_batch_width: true  # never wider than the batch (otherwise the result is squeezed)
+        ctc_stride: 8          # the label must fit into batch_width / 8 CTC steps
+        skip_unfit: true
+    # ... label encoding and KeepKeys as usual
+  sampler:
+    name: MultiScaleSampler
+    scales: [[320, 32], [320, 48], [320, 64]]
+    first_bs: 64
+    fix_bs: false
+    divided_factor: [8, 16]
+    is_training: true
+    max_w: 1600                # upper bound of the batch width
+    sorted_batch_ratio: 0.5    # half of the batches: images of similar w/h; the rest shuffled
+    pad_to_longest: true       # batch width follows the widest image, long lines are not squeezed
+
+Eval:                          # validate like inference: every batch at its own aspect ratio
+  dataset:
+    name: MultiScaleDataSet
+    ds_width: true
+    transforms:
+    - DecodeImage: {img_mode: BGR, channel_first: false}
+    - MultiLabelEncode: {gtc_encode: NRTRLabelEncode}
+    - KeepKeys: {keep_keys: [image, label_ctc, label_gtc, length, valid_ratio]}
+  sampler:
+    name: MultiScaleSampler
+    scales: [[320, 48]]        # height 48 only (inference pooling needs it)
+    first_bs: 32
+    fix_bs: true
+    is_training: false
+    max_w: 2400
+    pad_to_longest: true
+```
+
+Notes:
+
+- Wide batches need much more memory; lower `first_bs` when `max_w` is large.
+- `train_seq_len` only changes training; the exported model is the same. When `Eval` uses a sampler,
+  `tools/export_model.py` adds `RecResizeImg` to `inference.yml` for the inference pipeline.
+- On Windows the last evaluation batch is skipped; with the sampler it holds the widest images.
+
 ### 4.3 Model Evaluation
 
 You can evaluate the trained weights, such as `output/xxx/xxx.pdparams`, using the following command:

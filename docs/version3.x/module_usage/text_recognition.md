@@ -962,6 +962,78 @@ python3 -m paddle.distributed.launch --gpus '0,1,2,3'  tools/train.py -c configs
 ```
 
 
+#### 4.2.1 长文本行训练（可选）
+
+默认情况下，`PPLCNetV3`/`PPLCNetV4`/`PPHGNetV2` 识别骨干网络在训练时将特征池化为固定的 40 个 CTC 步长，而推理时为
+`W / 8` 个步长。需要超过 40 个步长的标签（约 35 个字符以上的文本行）的 CTC 损失为零，会被静默忽略。如果数据中包含长文本行
+（整行文档文本而不是单词），可以使用以下可选配置。所有配置默认关闭，不设置时训练行为与之前完全一致。
+
+```yaml
+Architecture:
+  Backbone:
+    name: PPLCNetV4
+    model_size: small
+    train_seq_len: -1          # 训练时 CTC 长度为 W / 8，与推理一致
+
+Metric:
+  name: RecMetric
+  main_indicator: acc
+  length_buckets: [15, 40, 60] # 日志中增加 acc_len_0_15、acc_len_16_40 等指标
+
+Train:
+  dataset:
+    name: MultiScaleDataSet
+    ds_width: true             # 标注文件为 4 列：路径、文本、宽、高
+    transforms:
+    - DecodeImage: {img_mode: BGR, channel_first: false}
+    - RecAug:
+        tia_max_vertical_ratio: 0.25  # 限制宽图上 TIA 的垂直偏移
+    - RecConAug:
+        prob: 0.5
+        ext_data_num: 10
+        image_shape: [48, 2560, 3]
+        max_text_length: *max_text_length
+        add_space: true        # 拼接的单词之间加入间隔和空格
+        fit_batch_width: true  # 拼接结果不超过 batch 宽度（否则会被压缩）
+        ctc_stride: 8          # 标签必须能放入 batch_width / 8 个 CTC 步长
+        skip_unfit: true
+    # ... 标签编码和 KeepKeys 与通常相同
+  sampler:
+    name: MultiScaleSampler
+    scales: [[320, 32], [320, 48], [320, 64]]
+    first_bs: 64
+    fix_bs: false
+    divided_factor: [8, 16]
+    is_training: true
+    max_w: 1600                # batch 宽度上限
+    sorted_batch_ratio: 0.5    # 一半 batch 由宽高比相近的图像组成，其余随机打乱
+    pad_to_longest: true       # batch 宽度取最宽的图像，长文本行不被压缩
+
+Eval:                          # 与推理一致的验证：每个 batch 使用自身的宽高比
+  dataset:
+    name: MultiScaleDataSet
+    ds_width: true
+    transforms:
+    - DecodeImage: {img_mode: BGR, channel_first: false}
+    - MultiLabelEncode: {gtc_encode: NRTRLabelEncode}
+    - KeepKeys: {keep_keys: [image, label_ctc, label_gtc, length, valid_ratio]}
+  sampler:
+    name: MultiScaleSampler
+    scales: [[320, 48]]        # 仅高度 48（推理池化需要）
+    first_bs: 32
+    fix_bs: true
+    is_training: false
+    max_w: 2400
+    pad_to_longest: true
+```
+
+说明：
+
+- 宽 batch 占用显存显著增加，`max_w` 较大时请减小 `first_bs`。
+- `train_seq_len` 只影响训练，导出的模型不变。当 `Eval` 使用 sampler 时，`tools/export_model.py` 会在
+  `inference.yml` 中为推理流程添加 `RecResizeImg`。
+- 在 Windows 上最后一个评估 batch 会被跳过；使用 sampler 时它包含最宽的图像。
+
 ### 4.3 模型评估
 
 您可以评估已经训练好的权重，如，`output/xxx/xxx.pdparams`，使用如下命令进行评估：
