@@ -103,7 +103,7 @@ Train:
         tia_max_vertical_ratio: 0.25
     - RecConAug:
         prob: 0.7
-        ext_data_num: 10
+        ext_data_num: 5  # candidates per sample; 10 cost 2x the data time, same glue share (~6 %)
         image_shape: [48, 2560, 3]
         max_text_length: *max_text_length
         add_space: true
@@ -115,6 +115,7 @@ Train:
         log_every: 20000       # concatenation stats per dataloader worker
         ext_aug:
           reverse_prob: 0.0
+          tia_prob: 0.2  # glued parts come from other lines anyway; TIA is the costly augmentation
           tia_max_vertical_ratio: 0.25
     - RecAug:
         tia_prob: 0.0
