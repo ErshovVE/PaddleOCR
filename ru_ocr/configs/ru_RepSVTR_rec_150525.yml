@@ -138,13 +138,14 @@ Train:
   sampler:
     name: MultiScaleSampler
     scales: [[320, 32], [320, 48], [320, 64]]
-    # batch size is per scale for the base 320x32 area; wide batches (max_w 1600)
-    # take far more memory -> lower first_bs if the GPU runs out of memory
+    # first_bs is the batch of the lowest scale (h 32); it shrinks with height only, not with
+    # width: every batch is padded to its longest line (up to max_w). Measured on a T4 15 GB at
+    # max_w 1600: fp32 fits 32 (48 is on the edge), fp16 fits 48 -- re-check at max_w 2400.
     first_bs: &bs 64
     fix_bs: false
     divided_factor: [8, 16]
     is_training: true
-    max_w: 1600
+    max_w: 2400  # 300 CTC steps at h 32: lines up to 250 chars fit without squeezing past 2400 px
     sorted_batch_ratio: 0.5
     pad_to_longest: true
   loader:
