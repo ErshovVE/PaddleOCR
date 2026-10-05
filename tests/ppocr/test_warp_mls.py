@@ -9,7 +9,13 @@ from ppocr.data.imaug.text_image_aug.warp_mls import WarpMLS
 
 
 class LoopWarpMLS:
-    """The original implementation (PaddleOCR 3.7, from RubanSeven/Text-Image-Augmentation-python), kept as reference."""
+    """The original implementation (PaddleOCR 3.7, from RubanSeven/Text-Image-Augmentation-python), kept as reference.
+
+    FLOAT is float32 as in the original; Loop64 below is the same loop in float64 -- the exact
+    reference for the displacement field (the float32 loop is off by up to ~0.5 px at 4000 px).
+    """
+
+    FLOAT = np.float32
 
     def __init__(self, src, src_pts, dst_pts, dst_w, dst_h, trans_ratio=1.0):
         self.src = src
@@ -32,7 +38,7 @@ class LoopWarpMLS:
         return self.gen_img()
 
     def calc_delta(self):
-        w = np.zeros(self.pt_count, dtype=np.float32)
+        w = np.zeros(self.pt_count, dtype=self.FLOAT)
         if self.pt_count < 2:
             return
         i = 0
@@ -48,10 +54,10 @@ class LoopWarpMLS:
                 elif j >= self.dst_h:
                     break
                 sw = 0
-                swp = np.zeros(2, dtype=np.float32)
-                swq = np.zeros(2, dtype=np.float32)
-                new_pt = np.zeros(2, dtype=np.float32)
-                cur_pt = np.array([i, j], dtype=np.float32)
+                swp = np.zeros(2, dtype=self.FLOAT)
+                swq = np.zeros(2, dtype=self.FLOAT)
+                new_pt = np.zeros(2, dtype=self.FLOAT)
+                cur_pt = np.array([i, j], dtype=self.FLOAT)
                 k = 0
                 for k in range(self.pt_count):
                     if i == self.dst_pts[k][0] and j == self.dst_pts[k][1]:
@@ -79,7 +85,7 @@ class LoopWarpMLS:
                             continue
                         pt_i = self.dst_pts[k] - pstar
                         pt_j = np.array([-pt_i[1], pt_i[0]])
-                        tmp_pt = np.zeros(2, dtype=np.float32)
+                        tmp_pt = np.zeros(2, dtype=self.FLOAT)
                         tmp_pt[0] = (
                             np.sum(pt_i * cur_pt) * self.src_pts[k][0]
                             - np.sum(pt_j * cur_pt) * self.src_pts[k][1]
@@ -146,6 +152,10 @@ class LoopWarpMLS:
 FIELD_ATOL_PX = 0.05
 
 
+class Loop64(LoopWarpMLS):
+    FLOAT = np.float64
+
+
 def _image(h, w, channels, seed):
     """Blurred noise: text crops change smoothly from pixel to pixel, unlike raw noise."""
     rng = np.random.RandomState(seed)
@@ -164,7 +174,7 @@ def _assert_same_image(new, old):
     assert diff.mean() < 0.75
 
 
-@pytest.mark.parametrize("h,w", [(16, 30), (48, 100), (48, 101), (32, 250), (64, 1600), (150, 333)])
+@pytest.mark.parametrize("h,w", [(16, 30), (48, 100), (48, 101), (32, 250), (64, 1600), (150, 333), (44, 4000)])
 def test_displacement_field_matches_loop_version(h, w):
     rng = np.random.RandomState(h * 7 + w)
     # corner points coincide with grid nodes -- the special case of the original loop
@@ -174,8 +184,14 @@ def test_displacement_field_matches_loop_version(h, w):
     old, new = LoopWarpMLS(img, src, dst, w, h), WarpMLS(img, src, dst, w, h)
     old.calc_delta()
     new.calc_delta()
-    np.testing.assert_allclose(new.rdx, old.rdx, atol=FIELD_ATOL_PX)
-    np.testing.assert_allclose(new.rdy, old.rdy, atol=FIELD_ATOL_PX)
+    exact = Loop64(img, src, dst, w, h)
+    exact.calc_delta()
+    np.testing.assert_allclose(new.rdx, exact.rdx, atol=1e-6)
+    np.testing.assert_allclose(new.rdy, exact.rdy, atol=1e-6)
+    # the float32 loop drifts with the coordinate size; keep its error bounded where it is used
+    if w <= 1600:
+        np.testing.assert_allclose(new.rdx, old.rdx, atol=FIELD_ATOL_PX)
+        np.testing.assert_allclose(new.rdy, old.rdy, atol=FIELD_ATOL_PX)
 
 
 @pytest.mark.parametrize("func", [augment.tia_distort, augment.tia_stretch, augment.tia_perspective])
