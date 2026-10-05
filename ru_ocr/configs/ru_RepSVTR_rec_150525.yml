@@ -6,7 +6,7 @@
 Global:
   debug: false
   use_gpu: true
-  epoch_num: 20
+  epoch_num: 15  # ~38.5M samples (2.57M lines x 15): with train_seq_len -1 every line trains CTC, so fewer epochs than 40-step setups
   log_smooth_window: 20
   print_batch_step: 100
   save_model_dir: ./output/ru_RepSVTR_rec_150525
