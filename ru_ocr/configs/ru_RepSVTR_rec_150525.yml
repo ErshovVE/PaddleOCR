@@ -140,8 +140,9 @@ Train:
     scales: [[320, 32], [320, 48], [320, 64]]
     # first_bs is the batch of the lowest scale (h 32); it shrinks with height only, not with
     # width: every batch is padded to its longest line (up to max_w). Measured on a T4 15 GB at
-    # max_w 1600: fp32 fits 32 (48 is on the edge), fp16 fits 48 -- re-check at max_w 2400.
-    first_bs: &bs 64
+    # max_w 1600: fp32 fits 32 (48 is on the edge), fp16 fits 48. At max_w 2400 lines are up to
+    # 1.5x wider: 32 keeps a margin in fp32 and AMP; raise to 48 with AMP if memory allows.
+    first_bs: &bs 32
     fix_bs: false
     divided_factor: [8, 16]
     is_training: true
