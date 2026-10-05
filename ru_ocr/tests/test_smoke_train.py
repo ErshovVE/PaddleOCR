@@ -100,3 +100,61 @@ def test_smoke_train(repo_root, tmp_path):
     assert proc.returncode == 0, log[-4000:]
     assert "acc_len_" in log, log[-4000:]
     assert (out / "latest.pdparams").exists()
+
+
+@pytest.mark.resource_intensive
+def test_save_every_n_steps_and_resume_inside_epoch(repo_root, tmp_path):
+    """Global.save_batch_step saves "latest" inside the epoch; resuming from such a
+    checkpoint continues the same epoch and skips the batches already trained."""
+    import pickle
+
+    font_path = _font_path()
+    if font_path is None:
+        pytest.skip("no TrueType font with Cyrillic found")
+    data = tmp_path / "data"
+    data.mkdir()
+    labels = _make_dataset(data, 6, font_path, seed=2)
+    out = tmp_path / "output"
+
+    def p(path):
+        return Path(path).as_posix()
+
+    def run(*extra):
+        opts = [
+            "Global.epoch_num=1", "Global.use_gpu=false", "Global.distributed=false",
+            "Global.pretrained_model=", "Global.print_batch_step=1", "Global.eval_batch_step=[0,100000]",
+            "Global.save_batch_step=2", f"Global.save_model_dir={p(out)}",
+            f"Global.save_res_path={p(out / 'predicts.txt')}",
+            f"Train.dataset.data_dir={p(data)}", f"Train.dataset.label_file_list=[{p(labels)}]",
+            # one image per batch, one height: each step is a fraction of a second on CPU
+            "Train.sampler.first_bs=1", "Train.loader.batch_size_per_card=1", "Train.sampler.scales=[[320,32]]",
+            "Train.loader.num_workers=0",
+            f"Eval.dataset.data_dir={p(data)}", f"Eval.dataset.label_file_list=[{p(labels)}]",
+            "Eval.sampler.first_bs=1", "Eval.loader.num_workers=0", *extra,
+        ]
+        cmd = [sys.executable, "tools/train.py", "-c", "ru_ocr/configs/ru_PP-OCRv6_small_rec.yml", "-o"] + opts
+        proc = subprocess.run(cmd, cwd=repo_root, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=1800)
+        log = proc.stdout + proc.stderr
+        assert proc.returncode == 0, log[-4000:]
+        return log
+
+    log = run()
+    steps = log.count("global_step:")
+    assert steps >= 4, log[-3000:]
+    # saves inside the epoch (every 2 steps) plus the end-of-epoch one
+    assert log.count("save model in") >= 1 + steps // 2, log[-3000:]
+    with open(out / "latest.states", "rb") as f:
+        states = pickle.load(f)
+    assert "step_in_epoch" not in states  # the end-of-epoch save resumes at the next epoch
+
+    # pretend the session stopped after 2 batches of epoch 1
+    states.update(epoch=1, step_in_epoch=2, global_step=2)
+    with open(out / "latest.states", "wb") as f:
+        pickle.dump(states, f, protocol=2)
+    log = run(f"Global.checkpoints={p(out / 'latest')}")
+    assert "resume inside epoch 1: skipping the 2 batches already trained" in log, log[-3000:]
+    # tools/program.py drops the last batch of an epoch on Windows (max_iter = len - 1);
+    # the resumed epoch is shorter than len, so it trains up to the true last batch
+    batches = steps + (1 if sys.platform == "win32" else 0)
+    assert log.count("global_step:") == batches - 2, log[-3000:]

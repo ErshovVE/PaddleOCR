@@ -255,6 +255,9 @@ def train(
             )
         )
     save_epoch_step = config["Global"]["save_epoch_step"]
+    # also save "latest" every N training steps (0: only at the end of an epoch); such a
+    # checkpoint resumes inside its epoch, skipping the batches already trained
+    save_batch_step = config["Global"].get("save_batch_step", 0) or 0
     save_model_dir = config["Global"]["save_model_dir"]
     if not os.path.exists(save_model_dir):
         os.makedirs(save_model_dir)
@@ -303,6 +306,7 @@ def train(
     start_epoch = (
         best_model_dict["start_epoch"] if "start_epoch" in best_model_dict else 1
     )
+    resume_skip = best_model_dict.pop("skip_batches", 0)
 
     total_samples = 0
     train_reader_cost = 0.0
@@ -315,6 +319,47 @@ def train(
         if platform.system() == "Windows"
         else len(train_dataloader)
     )
+
+    def save_latest(epoch, step_in_epoch=None):
+        """Save the "latest" checkpoint; step_in_epoch marks a save inside the epoch."""
+        prefix = "latest"
+        # Apply EMA weights for save
+        _ema_train_state_latest = None
+        if ema is not None:
+            _ema_train_state_latest = copy.deepcopy(model.state_dict())
+            model.set_state_dict(ema.apply())
+        if uniform_output_enabled and step_in_epoch is None:
+            export(config, model, os.path.join(save_model_dir, prefix, "inference"))
+            gc.collect()
+            model_info = {"epoch": epoch, "metric": best_model_dict}
+        else:
+            model_info = None
+        save_model(
+            model,
+            optimizer,
+            (
+                os.path.join(save_model_dir, prefix)
+                if uniform_output_enabled
+                else save_model_dir
+            ),
+            logger,
+            config,
+            is_best=False,
+            prefix=prefix,
+            ema=ema,
+            train_state=_ema_train_state_latest,
+            save_model_info=model_info,
+            best_model_dict=best_model_dict,
+            epoch=epoch,
+            global_step=global_step,
+            **({"step_in_epoch": step_in_epoch} if step_in_epoch else {}),
+        )
+        # Restore training weights
+        if _ema_train_state_latest is not None:
+            model.set_state_dict(_ema_train_state_latest)
+
+        if log_writer is not None:
+            log_writer.log_model(is_best=False, prefix="latest")
 
     for epoch in range(start_epoch, epoch_num + 1):
         if train_dataloader.dataset.need_reset:
@@ -330,7 +375,24 @@ def train(
             if hasattr(train_dataloader.batch_sampler, "set_epoch"):
                 train_dataloader.batch_sampler.set_epoch(0)
 
+        skip = resume_skip if epoch == start_epoch else 0
+        loop_skip = 0  # samplers without skip_batches: skip in the loop (loads the data)
+        if skip:
+            if hasattr(train_dataloader.batch_sampler, "skip_batches"):
+                train_dataloader.batch_sampler.skip_batches = skip
+            else:
+                loop_skip = skip
+            logger.info(
+                "resume inside epoch {}: skipping the {} batches already trained".format(
+                    epoch, skip
+                )
+            )
+        step_offset = skip - loop_skip  # batches the sampler dropped before idx 0
+
         for idx, batch in enumerate(train_dataloader):
+            if idx < loop_skip:
+                reader_start = time.time()
+                continue
             model.train()
             profiler.add_profiler_step(profiler_options)
             train_reader_cost += time.time() - reader_start
@@ -458,6 +520,13 @@ def train(
 
             if wd_scheduler is not None:
                 wd_scheduler.step()
+
+            if (
+                save_batch_step
+                and global_step % save_batch_step == 0
+                and dist.get_rank() == 0
+            ):
+                save_latest(epoch, step_in_epoch=step_offset + idx + 1)
 
             # logger and visualdl
             stats = {
@@ -614,43 +683,7 @@ def train(
 
             reader_start = time.time()
         if dist.get_rank() == 0:
-            prefix = "latest"
-            # Apply EMA weights for save
-            _ema_train_state_latest = None
-            if ema is not None:
-                _ema_train_state_latest = copy.deepcopy(model.state_dict())
-                model.set_state_dict(ema.apply())
-            if uniform_output_enabled:
-                export(config, model, os.path.join(save_model_dir, prefix, "inference"))
-                gc.collect()
-                model_info = {"epoch": epoch, "metric": best_model_dict}
-            else:
-                model_info = None
-            save_model(
-                model,
-                optimizer,
-                (
-                    os.path.join(save_model_dir, prefix)
-                    if uniform_output_enabled
-                    else save_model_dir
-                ),
-                logger,
-                config,
-                is_best=False,
-                prefix=prefix,
-                ema=ema,
-                train_state=_ema_train_state_latest,
-                save_model_info=model_info,
-                best_model_dict=best_model_dict,
-                epoch=epoch,
-                global_step=global_step,
-            )
-            # Restore training weights
-            if _ema_train_state_latest is not None:
-                model.set_state_dict(_ema_train_state_latest)
-
-            if log_writer is not None:
-                log_writer.log_model(is_best=False, prefix="latest")
+            save_latest(epoch)
 
         if dist.get_rank() == 0 and epoch > 0 and epoch % save_epoch_step == 0:
             prefix = "iter_epoch_{}".format(epoch)

@@ -448,3 +448,19 @@ class TestRatioList:
         assert ds._index_map is None and len(ds) == 80
         assert ds.wh_version == 1
         np.testing.assert_array_equal(ds.wh_ratio_sort, np.argsort(ds.wh_ratio))
+
+
+class TestSkipBatches:
+    """Resume inside an epoch: the sampler drops the first batches of one epoch, by index only."""
+
+    def test_skip_drops_first_batches_of_one_epoch(self, source):
+        full = list(_sampler(source))
+        resumed = _sampler(source)
+        resumed.skip_batches = 3
+        assert list(resumed) == full[3:]
+        assert len(list(resumed)) == len(full)  # the next epoch is whole again
+
+    def test_skip_past_the_end_yields_nothing(self, source):
+        sampler = _sampler(source)
+        sampler.skip_batches = 10**6
+        assert list(sampler) == []

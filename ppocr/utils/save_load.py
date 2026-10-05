@@ -63,6 +63,20 @@ def _mkdir_if_not_exist(path, logger):
                 raise OSError("Failed to mkdir {}".format(path))
 
 
+def resume_position(states_dict):
+    """(epoch to start from, batches of it to skip) for a checkpoint's .states.
+
+    A checkpoint saved at the end of an epoch resumes at the next one; one saved
+    inside an epoch (Global.save_batch_step) carries step_in_epoch and resumes the
+    same epoch, skipping the batches it has already trained.
+    """
+    epoch = states_dict.get("epoch")
+    if epoch is None:
+        return None, 0
+    step = states_dict.get("step_in_epoch") or 0
+    return (epoch, step) if step else (epoch + 1, 0)
+
+
 def load_model(config, model, optimizer=None, model_type="det", ema=None):
     """
     load model from checkpoint or pretrained_model
@@ -158,8 +172,16 @@ def load_model(config, model, optimizer=None, model_type="det", ema=None):
                 states_dict = pickle.load(f, encoding="latin1")
             best_model_dict = states_dict.get("best_model_dict", {})
             best_model_dict["acc"] = 0.0
-            if "epoch" in states_dict:
-                best_model_dict["start_epoch"] = states_dict["epoch"] + 1
+            start_epoch, skip_batches = resume_position(states_dict)
+            if start_epoch is not None:
+                best_model_dict["start_epoch"] = start_epoch
+            if skip_batches:
+                best_model_dict["skip_batches"] = skip_batches
+                logger.info(
+                    "checkpoint saved inside epoch {}: resume it after {} batches".format(
+                        start_epoch, skip_batches
+                    )
+                )
         logger.info("resume from {}".format(checkpoints))
 
         # Restore EMA state if available

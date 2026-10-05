@@ -112,6 +112,7 @@ class MultiScaleSampler(Sampler):
         self.img_indices = img_indices
         self.n_samples_per_replica = num_samples_per_replica
         self.epoch = 0
+        self.skip_batches = 0  # set by the trainer when resuming inside an epoch
         self.rank = rank
         self.num_replicas = num_replicas
 
@@ -166,7 +167,10 @@ class MultiScaleSampler(Sampler):
             # evaluation (is_training=False) keeps a fixed batch order, so it
             # sees the same batches every time (Windows skips the last one)
             random.shuffle(self.batchs_in_one_epoch_id)
-        for batch_tuple_id in self.batchs_in_one_epoch_id:
+        # resume inside an epoch: drop the batches already trained (indices only,
+        # no image is loaded); applies to this one epoch
+        skip, self.skip_batches = self.skip_batches, 0
+        for batch_tuple_id in self.batchs_in_one_epoch_id[skip:]:
             yield self.batchs_in_one_epoch[batch_tuple_id]
 
     def iter(self):
