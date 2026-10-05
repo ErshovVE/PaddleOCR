@@ -49,6 +49,13 @@ def test_drop_vertical_and_val_by_folder(data):
     assert stats["dropped"] == {"vertical": 1} and stats["lines"] == 2
 
 
+def test_prefix_puts_folders_under_a_layout_dir(data):
+    """--prefix: data_dir is a layout folder (synth/, stroyinf/) of links to the real roots."""
+    root, a, b = data
+    train, _, _ = ml.merge(root, [a], set(), prefix="synth")
+    assert train[0] == "synth/gen_a/crops/0/image_00000.webp	привет	100	25"
+
+
 @pytest.mark.parametrize(
     "text,w,h,expected",
     [("ab", 20, 200, True), ("a", 20, 200, False), ("ab", 200, 20, False)],

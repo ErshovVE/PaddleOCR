@@ -32,9 +32,24 @@ python ru_ocr/tools/add_wh.py --label-file <кропы>/good.txt --data-dir <к�
 
 Валидационная часть — хвост файла: кропы пишутся по документам, поэтому в val попадают целые документы.
 
+Несколько папок генераторов (у каждой свои `crops/…`) склеиваются `merge_labels.py`: пути — от общего корня,
+val — целые папки. Источники с разными корнями (синтетика `doc-generator`, кропы `ocr_markup`) собираются в одну
+папку-корень из ссылок, а `--prefix` дописывает имя ссылки к путям:
+
+```bash
+# data/ru_root/synth -> doc-generator/out/synth_2m, data/ru_root/stroyinf -> ocr_markup/data
+# (Windows: New-Item -ItemType Junction; Linux: ln -s)
+python ru_ocr/tools/merge_labels.py --root <synth_2m> --inputs <synth_2m>/part1 <synth_2m>/part2     --label dataset.tsv --prefix synth --out-prefix data/ru_labels/synth_2m
+python ru_ocr/tools/merge_labels.py --root <ocr_markup/data> --inputs <папки stroyinf> --val <папка для val>     --drop-vertical --drop-no-alnum --drop-filler --min-cpu 0.8 --max-cpu 4 --prefix stroyinf     --out-prefix data/ru_labels/stroyinf_all
+```
+
+Фильтры (`--drop-*`, `--min-cpu/--max-cpu`) — для текстового слоя чужого OCR; синтетику ими не трогать:
+она уже сбалансирована, отбор сдвинул бы распределения.
+
 ## Обучение
 
-Пути в конфигах относительные (`./train_big/…`); свои данные подставляются через `-o`:
+Конфиги по умолчанию читают `./data/ru_root/` и разметку `./data/ru_labels/` (синтетика + stroyinf, eval — 5 000
+строк валидационной папки stroyinf); свои данные подставляются через `-o`:
 
 ```bash
 python -m paddle.distributed.launch --gpus 0,1 tools/train.py -c ru_ocr/configs/ru_PP-OCRv6_small_rec.yml \

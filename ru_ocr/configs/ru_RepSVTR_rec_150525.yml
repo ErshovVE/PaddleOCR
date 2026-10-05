@@ -83,11 +83,13 @@ Train:
   dataset:
     name: MultiScaleDataSet
     ds_width: true
-    data_dir: ./train_big/
+    # data_dir of links: synth -> doc-generator/out/synth_2m, stroyinf -> ocr_markup/data;
+    # labels made by ru_ocr/tools/merge_labels.py --prefix (see ru_ocr/README.md)
+    data_dir: ./data/ru_root/
     ext_op_transform_idx: 1
     label_file_list:
-    - ./train_big/all_real_clear_train_1000000_w_h.txt
-    - ./train_big_handwritten/handwritten_all_real_clear_train_150000_w_h.txt
+    - ./data/ru_labels/synth_2m_train_w_h.txt
+    - ./data/ru_labels/stroyinf_all_train_w_h.txt
     transforms:
     - DecodeImage:
         img_mode: BGR
@@ -154,11 +156,11 @@ Eval:
   dataset:
     name: MultiScaleDataSet
     ds_width: true
-    data_dir: ./train_big/
+    data_dir: ./data/ru_root/
     label_file_list:
-    - ./train_big/all_real_clear_valid_w_h.txt
-    # validation split of the handwritten set (the old config evaluated on its train file)
-    - ./train_big_handwritten/handwritten_all_real_clear_valid_w_h.txt
+    # 5 000 random lines of the stroyinf validation folder (whole documents, real text layer);
+    # the full split is stroyinf_all_val_w_h.txt (28 913 lines)
+    - ./data/ru_labels/stroyinf_all_val5k_w_h.txt
     transforms:
     - DecodeImage:
         img_mode: BGR

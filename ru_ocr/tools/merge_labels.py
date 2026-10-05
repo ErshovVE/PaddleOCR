@@ -3,6 +3,9 @@
 Every folder (ocr_markup / doc-generator output) has its own crops/ with the same
 names (crops/0/image_00000.webp), so the merged lines get paths relative to a common
 root: <folder relative to root>/crops/... -- then one Train.dataset.data_dir reads all.
+Sources under different roots (doc-generator, ocr_markup) go into one data_dir of
+links (synth -> doc-generator/out/synth_2m, stroyinf -> ocr_markup/data); --prefix
+puts the link name in front of the paths.
 
     python ru_ocr/tools/merge_labels.py --root ../ocr_markup/data \
         --inputs ../ocr_markup/data/stroyinf_textlayer_v2 ../ocr_markup/data/stroyinf_textlayer_v2_part* \
@@ -79,8 +82,9 @@ def drop_reason(text, w, h, filters):
     return None
 
 
-def merge(root, inputs, val_names, label_name="good.txt", filters=None):
-    """Returns (train_lines, val_lines, stats); lines are 'path\\ttext\\tw\\th'."""
+def merge(root, inputs, val_names, label_name="good.txt", filters=None, prefix=""):
+    """Returns (train_lines, val_lines, stats); lines are 'path\\ttext\\tw\\th'.
+    prefix -- folder under the training data_dir that points to root (a link)."""
     filters = filters or {}
     root = Path(root).resolve()
     train, val = [], []
@@ -88,6 +92,8 @@ def merge(root, inputs, val_names, label_name="good.txt", filters=None):
     for folder in inputs:
         folder = Path(folder).resolve()
         rel = folder.relative_to(root).as_posix()
+        if prefix:
+            rel = "{}/{}".format(prefix.strip("/"), rel)
         rows, bad = read_rows(folder / label_name)
         stats["folders"] += 1
         stats["bad"] += bad
@@ -124,6 +130,11 @@ def main(argv=None):
     parser.add_argument("--drop-filler", action="store_true")
     parser.add_argument("--min-cpu", type=float, default=None)
     parser.add_argument("--max-cpu", type=float, default=None)
+    parser.add_argument(
+        "--prefix",
+        default="",
+        help="folder under data_dir that links to --root (e.g. synth, stroyinf)",
+    )
     parser.add_argument("--out-prefix", required=True)
     args = parser.parse_args(argv)
 
@@ -143,7 +154,7 @@ def main(argv=None):
         "max_cpu": args.max_cpu,
     }
     train, val, stats = merge(
-        args.root, args.inputs, set(args.val), args.label, filters
+        args.root, args.inputs, set(args.val), args.label, filters, args.prefix
     )
     os.makedirs(os.path.dirname(os.path.abspath(args.out_prefix)), exist_ok=True)
     write_lines(args.out_prefix + "_train_w_h.txt", train)
