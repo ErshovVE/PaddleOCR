@@ -252,6 +252,65 @@ def _config(label_file, mode="Eval", sampler=None):
     return {"Global": {}, mode: section}
 
 
+
+def _con_aug_config(label_file, ext_data_num=3):
+    config = _config(label_file, mode="Train")
+    dataset = config["Train"]["dataset"]
+    dataset["ext_op_transform_idx"] = 1
+    dataset["transforms"].insert(
+        1,
+        {
+            "RecConAug": {
+                "prob": 1.0,
+                "ext_data_num": ext_data_num,
+                "image_shape": [48, 2560, 3],
+                "max_text_length": 25,
+                "add_space": True,
+                "fit_batch_width": True,
+                "ctc_stride": 8,
+                "skip_unfit": True,
+            }
+        },
+    )
+    return config
+
+
+class TestLazyExtData:
+    def test_candidates_are_lazy_with_label_ratio(self, label_file):
+        from ppocr.data.simple_dataset import LazyExtSample
+
+        ds = MultiScaleDataSet(_con_aug_config(label_file), "Train", LOGGER, seed=0)
+        ext = ds.get_ext_data()
+        assert len(ext) == 3 and all(isinstance(e, LazyExtSample) for e in ext)
+        by_label = {f"text{i}": w / h for i, (h, w) in enumerate(SIZES)}
+        for e in ext:
+            assert e.wh_ratio == pytest.approx(by_label[e.label])
+            loaded = e.load()
+            assert loaded["label"] == e.label
+            assert loaded["image"].shape[1] / loaded["image"].shape[0] == pytest.approx(
+                e.wh_ratio
+            )
+
+    def test_missing_image_loads_none(self, label_file):
+        ds = MultiScaleDataSet(_con_aug_config(label_file), "Train", LOGGER, seed=0)
+        (label_file.parent / "img_0.png").unlink()
+        ext = ds.get_ext_data()[0]
+        ext.img_path = str(label_file.parent / "img_0.png")
+        assert ext.load() is None
+
+    def test_only_glued_candidates_are_read(self, label_file, monkeypatch):
+        import ppocr.data.simple_dataset as sd
+
+        reads = []
+        real = sd._load_image_bytes
+        monkeypatch.setattr(sd, "_load_image_bytes", lambda p: reads.append(p) or real(p))
+        ds = MultiScaleDataSet(_con_aug_config(label_file, 5), "Train", LOGGER, seed=0)
+        # narrow batch (w/h 2): nothing can be glued to the 100 px line
+        image, _ = ds[(96, 48, 1, 2.0, False)]
+        assert image.shape == (3, 48, 96)
+        assert len(reads) == 1  # the sample itself, no candidate was read
+
+
 class TestMultiScaleDataSet:
     @pytest.fixture
     def dataset(self, label_file):

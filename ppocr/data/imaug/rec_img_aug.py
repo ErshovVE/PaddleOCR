@@ -357,7 +357,14 @@ class RecConAug(object):
     skip_unfit: try the next extra sample when one does not fit (too long or
         too wide) instead of stopping; finds short words for narrow batches.
     log_every: log concatenation statistics every N calls per worker (0: off).
+
+    ext_data items are sample dicts or lazy samples (label, wh_ratio, load());
+    a lazy one is read only after its label fits and its label-file w/h, with
+    the narrowest gap, fits too; the exact width check runs on the image.
     """
+
+    # the dataset may hand over lazy extra samples (SimpleDataSet.get_ext_data)
+    lazy_ext_data = True
 
     def __init__(
         self,
@@ -451,6 +458,18 @@ class RecConAug(object):
             return 127
         return np.median(edges.reshape((-1,) + left.shape[2:]), axis=0)
 
+    def _too_wide_by_label(self, data, ext_sample, max_wh_ratio):
+        """The result is too wide even with the narrowest gap (label-file w/h)."""
+        if ext_sample.wh_ratio is None:
+            return False
+        min_gap = self.space_width_range[0] if self.add_space else 0
+        ratio = (
+            data["image"].shape[1] / data["image"].shape[0]
+            + ext_sample.wh_ratio
+            + min_gap / self.image_shape[0]
+        )
+        return ratio > max_wh_ratio
+
     def merge_ext_data(self, data, ext_data, gap_w=0):
         ori_w = round(
             data["image"].shape[1] / data["image"].shape[0] * self.image_shape[0]
@@ -487,8 +506,11 @@ class RecConAug(object):
         max_wh_ratio, max_steps = self._limits(data)
         sep = " " if self.add_space else ""
         parts = 0
-        for idx, ext_data in enumerate(data["ext_data"]):
-            new_label = data["label"] + sep + ext_data["label"]
+        for ext_data in data["ext_data"]:
+            lazy = not isinstance(ext_data, dict)
+            new_label = data["label"] + sep + (
+                ext_data.label if lazy else ext_data["label"]
+            )
             if len(new_label) > self.max_text_length:
                 self.stats["reject_length"] += 1
                 if self.skip_unfit:
@@ -499,6 +521,15 @@ class RecConAug(object):
                 if self.skip_unfit:
                     continue
                 break
+            if lazy:
+                if self._too_wide_by_label(data, ext_data, max_wh_ratio):
+                    self.stats["reject_width"] += 1
+                    if self.skip_unfit:
+                        continue
+                    break
+                ext_data = ext_data.load()
+                if ext_data is None:  # unreadable image: try the next one
+                    continue
             if self.ext_aug is not None:
                 ext_data = self.ext_aug(ext_data)
             gap_w = random.randint(*self.space_width_range) if self.add_space else 0

@@ -169,6 +169,38 @@ def _img_path_exists(img_path):
     return os.path.exists(img_path)
 
 
+class LazyExtSample(object):
+    """Extra sample (for RecConAug) whose image is read and decoded only on load().
+
+    RecConAug rejects most candidates by label length, CTC steps and the w/h ratio
+    of the label file, so those are never read; with ext_data_num 5 and ~8 % of
+    samples concatenated this saves almost 5 image reads per sample.
+    """
+
+    def __init__(self, label, img_path, wh_ratio, load_ops):
+        self.label = label
+        self.img_path = img_path
+        self.wh_ratio = wh_ratio  # from the label file, None when unknown
+        self._load_ops = load_ops
+
+    def load(self):
+        """The sample dict with the decoded image, or None if it cannot be read."""
+        if not _img_path_exists(self.img_path):
+            return None
+        try:
+            data = {
+                "img_path": self.img_path,
+                "label": self.label,
+                "image": _load_image_bytes(self.img_path),
+            }
+        except Exception:
+            return None
+        data = transform(data, self._load_ops)
+        if data is None or "image" not in data:
+            return None
+        return data
+
+
 class SimpleDataSet(Dataset):
     def __init__(self, config, mode, logger, seed=None):
         super(SimpleDataSet, self).__init__()
@@ -349,11 +381,17 @@ class SimpleDataSet(Dataset):
 
     def get_ext_data(self):
         ext_data_num = 0
+        lazy = False
         for op in self.ops:
             if hasattr(op, "ext_data_num"):
                 ext_data_num = getattr(op, "ext_data_num")
+                lazy = getattr(op, "lazy_ext_data", False)
                 break
         load_data_ops = self.ops[: self.ext_op_transform_idx]
+        if lazy:
+            return [
+                self._lazy_ext_sample(load_data_ops) for _ in range(ext_data_num)
+            ]
         ext_data = []
 
         while len(ext_data) < ext_data_num:
@@ -392,6 +430,30 @@ class SimpleDataSet(Dataset):
                     continue
             ext_data.append(data)
         return ext_data
+
+    def _lazy_ext_sample(self, load_data_ops):
+        """A random extra sample that reads its image only on load()."""
+        if self._index_map is not None:
+            self._ensure_index_map()
+            file_idx = self._index_map[np.random.randint(len(self._index_map))]
+            data_line = self._all_lines[file_idx]
+        else:
+            file_idx = self.data_idx_order_list[np.random.randint(self.__len__())]
+            data_line = self.data_lines[file_idx]
+        substr = data_line.decode("utf-8").strip("\n").split(self.delimiter)
+        file_name = self._try_parse_filename_list(substr[0])
+        img_path = (
+            file_name
+            if file_name.startswith("http://") or file_name.startswith("https://")
+            else os.path.join(self.data_dir, file_name)
+        )
+        wh_ratio = None
+        if len(substr) >= 4:  # "path\tlabel\tw\th" label files
+            try:
+                wh_ratio = float(substr[2]) / float(substr[3])
+            except (ValueError, ZeroDivisionError):
+                wh_ratio = None
+        return LazyExtSample(substr[1], img_path, wh_ratio, load_data_ops)
 
     def __getitem__(self, idx):
         if self._index_map is not None:

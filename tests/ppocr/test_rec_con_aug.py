@@ -287,6 +287,74 @@ class TestRecConAugFitBatch:
         assert aug.stats["calls"] == 1
 
 
+
+class FakeLazy:
+    """Lazy extra sample like SimpleDataSet.get_ext_data hands to RecConAug."""
+
+    def __init__(self, label, w, wh_ratio="image", readable=True):
+        self.label = label
+        self.w = w
+        self.wh_ratio = w / 48 if wh_ratio == "image" else wh_ratio
+        self.readable = readable
+        self.loads = 0
+
+    def load(self):
+        self.loads += 1
+        if not self.readable:
+            return None
+        return {"image": _text_image(self.w), "label": self.label}
+
+
+class TestRecConAugLazy:
+    def test_glues_lazy_like_eager(self):
+        lazy = _data("a", 100)
+        lazy["ext_data"] = [FakeLazy("b", 60)]
+        out = _aug()(lazy)
+        assert out["label"] == "ab"
+        assert out["image"].shape == (48, 160, 3)
+        assert "ext_data" not in out
+
+    def test_rejected_by_label_never_loaded(self):
+        too_long, too_many_steps = FakeLazy("x" * 60, 40), FakeLazy("aaaa", 40)
+        data = _batch_data("a", 40, [], batch_w=48)
+        data["ext_data"] = [too_long, too_many_steps]
+        aug = _aug(fit_batch_width=True, ctc_stride=8, skip_unfit=True)
+        out = aug(data)
+        assert out["label"] == "a"
+        assert too_long.loads == 0 and too_many_steps.loads == 0
+        assert aug.stats["reject_length"] == 1 and aug.stats["reject_ctc"] == 1
+
+    def test_too_wide_by_label_never_loaded(self):
+        wide, fits = FakeLazy("b", 900), FakeLazy("c", 40)
+        data = _batch_data("a", 40, [], batch_w=192)
+        data["ext_data"] = [wide, fits]
+        aug = _aug(fit_batch_width=True, skip_unfit=True)
+        out = aug(data)
+        assert out["label"] == "ac"
+        assert wide.loads == 0 and fits.loads == 1
+        assert aug.stats["reject_width"] == 1
+
+    def test_unknown_ratio_checked_on_image(self):
+        wide = FakeLazy("b", 900, wh_ratio=None)
+        data = _batch_data("a", 40, [], batch_w=192)
+        data["ext_data"] = [wide]
+        aug = _aug(fit_batch_width=True, skip_unfit=True)
+        assert aug(data)["label"] == "a"
+        assert wide.loads == 1 and aug.stats["reject_width"] == 1
+
+    def test_unreadable_is_skipped(self):
+        data = _data("a", 100)
+        data["ext_data"] = [FakeLazy("b", 60, readable=False), FakeLazy("c", 60)]
+        assert _aug(skip_unfit=True)(data)["label"] == "ac"
+
+    def test_prob_zero_loads_nothing(self):
+        ext = FakeLazy("b", 60)
+        data = _data("a", 100)
+        data["ext_data"] = [ext]
+        assert _aug(prob=0.0)(data)["label"] == "a"
+        assert ext.loads == 0
+
+
 class TestRotation:
     @pytest.mark.parametrize(
         "ratio,expected", [(1, 3.0), (3, 3.0), (30, 0.6), (29, 0.6144)]
