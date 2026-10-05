@@ -10,7 +10,7 @@ Global:
   model_name: PP-OCRv6_small_rec
   debug: false
   use_gpu: true
-  epoch_num: 15  # ~38.5M samples (2.57M lines x 15): with train_seq_len -1 every line trains CTC, so fewer epochs than 40-step setups
+  epoch_num: 10  # ~25.7M samples (2.57M lines x 10, ~56k steps and ~7 h per epoch on 2x T4); from the PP-OCRv6 pretrained weights, the train metrics rise much faster than the May model's from scratch
   log_smooth_window: 20
   print_batch_step: 100
   save_model_dir: ./output/ru_PP-OCRv6_small_rec
