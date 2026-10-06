@@ -2,7 +2,7 @@
 
 A Kaggle commit run saves /kaggle/working only when the notebook ends; a crash or a
 cancelled run loses every checkpoint. This watcher copies the newest checkpoint files
-(latest.*, best_accuracy.* and the train log) of the save_model_dir to a staging folder
+(latest.*, best_accuracy.*, the train log and config.yml) of the save_model_dir to a staging folder
 once they have stopped changing, and uploads them as a new version of a dataset with the
 Kaggle CLI (old versions are deleted). Attach that dataset as input to resume from it.
 
@@ -22,7 +22,7 @@ import subprocess
 import threading
 import time
 
-PATTERNS = ("latest.*", "best_accuracy.*", "train.log")
+PATTERNS = ("latest.*", "best_accuracy.*", "train.log", "config.yml")
 
 
 class CheckpointUploader(object):

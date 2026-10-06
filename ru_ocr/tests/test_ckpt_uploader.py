@@ -56,13 +56,15 @@ def _calls(log):
 def test_first_upload_creates_then_versions(tmp_path, monkeypatch):
     up, src, log, messages = _setup(tmp_path, monkeypatch)
     _save(src)
-    (src / "train.log").write_text("log")
-    os.utime(src / "train.log", (time.time() - 60,) * 2)
+    for name in ("train.log", "config.yml"):
+        (src / name).write_text(name)
+        os.utime(src / name, (time.time() - 60,) * 2)
     (src / "best_accuracy").mkdir()  # folders are not uploaded
     assert up.poll_once()
     staged = sorted(os.listdir(tmp_path / "stage"))
     assert staged == [
-        "dataset-metadata.json", "latest.pdopt", "latest.pdparams", "latest.states", "train.log",
+        "config.yml", "dataset-metadata.json", "latest.pdopt", "latest.pdparams", "latest.states",
+        "train.log",
     ]
     meta = json.loads((tmp_path / "stage" / "dataset-metadata.json").read_text())
     assert meta["id"] == "someone/ru-ocr-checkpoints"
