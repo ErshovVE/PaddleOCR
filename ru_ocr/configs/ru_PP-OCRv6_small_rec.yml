@@ -130,6 +130,7 @@ Train:
         jpeg_prob: 0.15           # JPEG quality 25..70
         stroke_prob: 0.1          # bolder strokes; thinner in 30% of cases, only where safe
         stroke_thin_share: 0.3
+        edge_lines_prob: 0.1      # table rules on 1-2 sides, as a detector box on a table cell
     - MultiLabelEncode:
         gtc_encode: NRTRLabelEncode
     - KeepKeys:
