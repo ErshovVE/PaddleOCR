@@ -158,3 +158,61 @@ def test_save_every_n_steps_and_resume_inside_epoch(repo_root, tmp_path):
     # the resumed epoch is shorter than len, so it trains up to the true last batch
     batches = steps + (1 if sys.platform == "win32" else 0)
     assert log.count("global_step:") == batches - 2, log[-3000:]
+
+
+@pytest.mark.resource_intensive
+def test_stop_signal_saves_latest_inside_epoch(repo_root, tmp_path):
+    """Global.save_on_signal: a stop signal (SIGTERM from paddle.distributed.launch on
+    Linux, Ctrl+Break here on Windows) finishes the step, saves "latest" with the
+    position inside the epoch and exits 0."""
+    import pickle
+    import signal
+    import time
+
+    font_path = _font_path()
+    if font_path is None:
+        pytest.skip("no TrueType font with Cyrillic found")
+    data = tmp_path / "data"
+    data.mkdir()
+    labels = _make_dataset(data, 6, font_path, seed=3)
+    out = tmp_path / "output"
+
+    def p(path):
+        return Path(path).as_posix()
+
+    opts = [
+        "Global.epoch_num=200", "Global.use_gpu=false", "Global.distributed=false",
+        "Global.pretrained_model=", "Global.print_batch_step=1", "Global.eval_batch_step=[0,100000]",
+        "Global.save_batch_step=0", "Global.save_on_signal=true", f"Global.save_model_dir={p(out)}",
+        f"Train.dataset.data_dir={p(data)}", f"Train.dataset.label_file_list=[{p(labels)}]",
+        "Train.sampler.first_bs=1", "Train.loader.batch_size_per_card=1", "Train.sampler.scales=[[320,32]]",
+        "Train.loader.num_workers=0",
+        f"Eval.dataset.data_dir={p(data)}", f"Eval.dataset.label_file_list=[{p(labels)}]",
+        "Eval.sampler.first_bs=1", "Eval.loader.num_workers=0",
+    ]
+    cmd = [sys.executable, "tools/train.py", "-c", "ru_ocr/configs/ru_PP-OCRv6_small_rec.yml", "-o"] + opts
+    log_path = tmp_path / "train_stdout.txt"
+    kwargs = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    with open(log_path, "w", encoding="utf-8") as log_file:
+        proc = subprocess.Popen(cmd, cwd=repo_root, stdout=log_file, stderr=subprocess.STDOUT, **kwargs)
+        try:
+            deadline = time.time() + 600
+            # stop in epoch 2, after a few of its steps (6 lines -> 5 or 6 steps per epoch)
+            while log_path.read_text(encoding="utf-8", errors="replace").count("global_step:") < 8:
+                assert proc.poll() is None and time.time() < deadline, log_path.read_text(errors="replace")[-3000:]
+                time.sleep(0.5)
+            proc.send_signal(signal.CTRL_BREAK_EVENT if sys.platform == "win32" else signal.SIGTERM)
+            proc.wait(timeout=300)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+    log = log_path.read_text(encoding="utf-8", errors="replace")
+    assert proc.returncode == 0, log[-4000:]
+    assert "stopped by signal" in log, log[-3000:]
+    with open(out / "latest.states", "rb") as f:
+        states = pickle.load(f)
+    steps = log.count("global_step:")
+    assert states["global_step"] == steps
+    assert states["epoch"] >= 2 and states.get("step_in_epoch", 0) >= 1, states

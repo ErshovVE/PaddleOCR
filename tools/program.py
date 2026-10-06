@@ -20,6 +20,7 @@ import os
 import gc
 import sys
 import platform
+import signal
 import yaml
 import time
 import datetime
@@ -197,6 +198,51 @@ def to_float32(preds):
     return preds
 
 
+class StopSignal(object):
+    """SIGTERM / SIGINT ask the train loop to stop cleanly (Global.save_on_signal).
+
+    The handler only sets a flag: the step in progress finishes, "latest" is saved
+    and train() returns. paddle.distributed.launch stops the workers with SIGTERM to
+    the whole process group (the DataLoader workers die too) and kills them after
+    30 s, which is enough for the save.
+    """
+
+    def __init__(self):
+        self.requested = False
+        self.signum = None
+
+    def install(self):
+        signums = [signal.SIGTERM, signal.SIGINT]
+        if hasattr(signal, "SIGBREAK"):  # Windows: Ctrl+Break (SIGTERM cannot be caught)
+            signums.append(signal.SIGBREAK)
+        for signum in signums:
+            signal.signal(signum, self._handle)
+        return self
+
+    def _handle(self, signum, frame):
+        self.requested = True
+        self.signum = signum
+        if hasattr(signal, "SIGCHLD"):
+            # the DataLoader workers are stopped with us: paddle's SIGCHLD handler
+            # would raise "worker exited" in this thread, maybe during the save
+            signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+
+
+def batches_until_stopped(loader, stop_signal):
+    """Batches of loader until a stop is requested (errors after the request end it)."""
+    it = iter(loader)
+    while not stop_signal.requested:
+        try:
+            batch = next(it)
+        except StopIteration:
+            return
+        except Exception:
+            if stop_signal.requested:  # the workers were stopped with us
+                return
+            raise
+        yield batch
+
+
 def train(
     config,
     train_dataloader,
@@ -258,6 +304,9 @@ def train(
     # also save "latest" every N training steps (0: only at the end of an epoch); such a
     # checkpoint resumes inside its epoch, skipping the batches already trained
     save_batch_step = config["Global"].get("save_batch_step", 0) or 0
+    stop_signal = (
+        StopSignal().install() if config["Global"].get("save_on_signal") else None
+    )
     save_model_dir = config["Global"]["save_model_dir"]
     if not os.path.exists(save_model_dir):
         os.makedirs(save_model_dir)
@@ -388,8 +437,14 @@ def train(
                 )
             )
         step_offset = skip - loop_skip  # batches the sampler dropped before idx 0
+        trained_in_epoch = step_offset
+        batches = (
+            train_dataloader
+            if stop_signal is None
+            else batches_until_stopped(train_dataloader, stop_signal)
+        )
 
-        for idx, batch in enumerate(train_dataloader):
+        for idx, batch in enumerate(batches):
             if idx < loop_skip:
                 reader_start = time.time()
                 continue
@@ -513,6 +568,7 @@ def train(
             train_batch_cost += train_batch_time
             eta_meter.update(train_batch_time)
             global_step += 1
+            trained_in_epoch = step_offset + idx + 1
             total_samples += len(images)
 
             if not isinstance(lr_scheduler, float):
@@ -584,6 +640,7 @@ def train(
                 global_step > start_eval_step
                 and (global_step - start_eval_step) % eval_batch_step == 0
                 and dist.get_rank() == 0
+                and not (stop_signal is not None and stop_signal.requested)
             ):
                 if model_average:
                     Model_Average = paddle.incubate.ModelAverage(
@@ -682,6 +739,22 @@ def train(
                     model.set_state_dict(_ema_train_state)
 
             reader_start = time.time()
+            if stop_signal is not None and stop_signal.requested:
+                break
+        if stop_signal is not None and stop_signal.requested:
+            if dist.get_rank() == 0:
+                if trained_in_epoch:
+                    save_latest(epoch, step_in_epoch=trained_in_epoch)
+                else:  # nothing of this epoch trained yet: the previous one is complete
+                    save_latest(epoch - 1)
+                logger.info(
+                    "stopped by signal {} at global step {}: saved latest".format(
+                        stop_signal.signum, global_step
+                    )
+                )
+            if dist.get_rank() == 0 and log_writer is not None:
+                log_writer.close()
+            return
         if dist.get_rank() == 0:
             save_latest(epoch)
 
