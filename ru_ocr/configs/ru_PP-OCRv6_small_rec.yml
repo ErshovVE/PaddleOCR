@@ -10,7 +10,7 @@ Global:
   model_name: PP-OCRv6_small_rec
   debug: false
   use_gpu: true
-  epoch_num: 10  # ~25.7M samples (2.57M lines x 10, ~56k steps and ~7 h per epoch on 2x T4); from the PP-OCRv6 pretrained weights, the train metrics rise much faster than the May model's from scratch
+  epoch_num: 4  # fine-tuning on all data from the step-88k weights: ~14.5M samples (3.63M lines x 4, ~79k steps and ~10 h per epoch on 2x T4)
   log_smooth_window: 20
   print_batch_step: 100
   save_model_dir: ./output/ru_PP-OCRv6_small_rec
@@ -37,8 +37,8 @@ Optimizer:
   beta2: 0.999
   lr:
     name: Cosine
-    learning_rate: 0.0005
-    warmup_epoch: 1
+    learning_rate: 0.0005  # the LR of the step-88k checkpoint (1 warmup epoch, then barely into the cosine)
+    warmup_epoch: 0  # starts from trained weights: decay right away
   regularizer:
     name: L2
     factor: 3.0e-05
@@ -92,8 +92,8 @@ Train:
     data_dir: ./data/ru_root/
     ext_op_transform_idx: 1
     label_file_list:
-    - ./data/ru_labels/synth_2m_train_w_h.txt
-    - ./data/ru_labels/stroyinf_all_train_w_h.txt
+    # synth_2m + stroyinf v2 (Soviet) + stroyinf modern (>= 1992) train parts, one file
+    - ./data/ru_labels/all_train_w_h.txt
     transforms:
     - DecodeImage:
         img_mode: BGR
@@ -166,9 +166,8 @@ Eval:
     ds_width: true
     data_dir: ./data/ru_root/
     label_file_list:
-    # 5 000 random lines of the stroyinf validation folder (whole documents, real text layer);
-    # the full split is stroyinf_all_val_w_h.txt (28 913 lines)
-    - ./data/ru_labels/stroyinf_all_val5k_w_h.txt
+    # 5 000 random lines of all_val_w_h.txt (50 565: stroyinf v2 val folder + tail 2 % of stroyinf modern)
+    - ./data/ru_labels/all_val5k_w_h.txt
     transforms:
     - DecodeImage:
         img_mode: BGR
