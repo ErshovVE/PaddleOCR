@@ -1016,7 +1016,9 @@ Notes:
   limit falls smoothly with the line length (`rotate_ratios: [3, 30]`, `rotate_degs: [3.0, 0.6]`: up to 3° for
   words, 0.6° at w/h 30), the canvas grows in height so nothing is cut; `downscale_prob` — low-DPI scan;
   `jpeg_prob` — JPEG artifacts; `stroke_prob` — bolder or thinner strokes (`stroke_thin_share`), changes that
-  would break or glue characters are undone.
+  would break or glue characters are undone; `edge_lines_prob` — table rules next to the text on one or two sides
+  (`edge_lines_gap` as a share of the height, `edge_lines_thickness`), drawn on a grown canvas so the letters stay
+  untouched, like a detector box on a table cell.
 
 ### 4.3 Model Evaluation
 

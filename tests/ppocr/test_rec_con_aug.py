@@ -25,10 +25,12 @@ from ppocr.data.imaug.rec_img_aug import (
     _ink_mask,
     _ink_threshold,
     _n_components,
+    add_edge_lines,
     change_stroke,
     downscale_upscale,
     jpeg_compress,
     max_rotation_deg,
+    pick_edge_sides,
     rotate_text,
 )
 from ppocr.data.imaug.text_image_aug import tia_distort
@@ -574,6 +576,71 @@ class TestScanArtifacts:
             {"stroke_alpha": (0.5, 1.5)},
             {"stroke_thin_share": 2},
         ],
+    )
+    def test_invalid(self, kwargs):
+        with pytest.raises(AssertionError):
+            RecAug(**kwargs)
+
+
+class TestEdgeLines:
+    @pytest.mark.parametrize("side", ["top", "bottom", "left", "right"])
+    def test_line_goes_into_new_margin_and_keeps_text(self, side):
+        img = _font_line(30)
+        h, w = img.shape[:2]
+        for _ in range(20):
+            out = add_edge_lines(img, [side], thickness=(2, 2), darkness=(1.0, 1.0))
+            vertical = side in ("left", "right")
+            grown = out.shape[1] - w if vertical else out.shape[0] - h
+            assert grown >= 2 and out.shape[1 - vertical] == img.shape[1 - vertical]
+            y0 = grown if side == "top" else 0
+            x0 = grown if side == "left" else 0
+            # the original pixels are untouched: no line over letters
+            assert np.array_equal(out[y0 : y0 + h, x0 : x0 + w], img)
+            strip = np.delete(out, np.s_[y0 : y0 + h] if not vertical else np.s_[x0 : x0 + w], axis=int(vertical))
+            assert strip.min() < 100  # a dark line was drawn in the margin
+
+    def test_gap_scales_with_height_and_line_is_lighter_than_ink_at_low_darkness(self):
+        img = _font_line(40)
+        out = add_edge_lines(img, ["top"], gap_ratio=(0.5, 0.5), thickness=(1, 1), darkness=(0.3, 0.3))
+        assert out.shape[0] - img.shape[0] >= int(0.5 * img.shape[0]) + 1
+        top = out[: out.shape[0] - img.shape[0]]
+        assert 120 < top.min() < 255
+
+    def test_dark_background_gets_light_line(self):
+        img = 255 - _font_line(30)
+        out = add_edge_lines(img, ["bottom"], thickness=(2, 2), darkness=(1.0, 1.0))
+        assert out[img.shape[0] :].max() > 200
+
+    def test_grayscale_image(self):
+        img = _font_line(30)[:, :, 0].copy()
+        out = add_edge_lines(img, ["top", "left"])
+        assert out.ndim == 2 and out.shape[0] > img.shape[0] and out.shape[1] > img.shape[1]
+
+    def test_pick_sides_one_or_two_distinct(self):
+        random.seed(5)
+        seen = set()
+        for _ in range(200):
+            sides = pick_edge_sides()
+            assert 1 <= len(sides) <= 2 and len(set(sides)) == len(sides)
+            seen.update(sides)
+        assert seen == {"top", "bottom", "left", "right"}
+
+    def test_rec_aug_option(self):
+        aug = RecAug(**NO_BDA, tia_prob=0, edge_lines_prob=1.0)
+        img = _font_line(30)
+        out = aug({"image": img.copy()})["image"]
+        assert out.shape[0] > img.shape[0] or out.shape[1] > img.shape[1]
+
+    def test_off_by_default_draws_no_random_numbers(self):
+        random.seed(3)
+        RecAug(**NO_BDA, tia_prob=0)({"image": _text_image(100)})
+        expected = random.random()
+        random.seed(3)
+        RecAug(**NO_BDA, tia_prob=0, edge_lines_prob=0)({"image": _text_image(100)})
+        assert random.random() == expected
+
+    @pytest.mark.parametrize(
+        "kwargs", [{"edge_lines_gap": (0.2, 0.1)}, {"edge_lines_thickness": (0, 2)}]
     )
     def test_invalid(self, kwargs):
         with pytest.raises(AssertionError):

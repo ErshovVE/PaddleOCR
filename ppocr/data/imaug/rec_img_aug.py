@@ -48,6 +48,14 @@ def max_rotation_deg(wh_ratio, ratios=(3.0, 30.0), degs=(3.0, 0.6)):
     return float(d0 * (r0 / wh_ratio) ** power)
 
 
+def _border_fill(img):
+    """Background colour: median of the first and last rows."""
+    border = np.concatenate(
+        [img[0].reshape(-1, *img.shape[2:]), img[-1].reshape(-1, *img.shape[2:])]
+    )
+    return np.median(border, axis=0)
+
+
 def rotate_text(img, angle):
     """Rotate around the centre; the canvas grows in height so nothing is cut.
 
@@ -61,11 +69,7 @@ def rotate_text(img, angle):
     new_h = int(math.ceil(h * math.cos(rad) + w * math.sin(rad)))
     m = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), angle, 1.0)
     m[1, 2] += (new_h - h) / 2.0
-    border = np.concatenate(
-        [img[0].reshape(-1, *img.shape[2:]), img[-1].reshape(-1, *img.shape[2:])]
-    )
-    fill = np.median(border, axis=0)
-    fill = tuple(float(v) for v in np.atleast_1d(fill))
+    fill = tuple(float(v) for v in np.atleast_1d(_border_fill(img)))
     return cv2.warpAffine(
         img, m, (w, new_h), borderMode=cv2.BORDER_CONSTANT, borderValue=fill
     )
@@ -145,6 +149,89 @@ def change_stroke(img, thicken, alpha, min_ink_keep=0.6, max_merge=0.25):
     return out
 
 
+def _pad_side(img, side, n, fill):
+    """Grow the canvas by n px on one side, filled with `fill`."""
+    h, w = img.shape[:2]
+    vertical = side in ("left", "right")
+    shape = (h, w + n) if vertical else (h + n, w)
+    out = np.empty(shape + img.shape[2:], dtype=img.dtype)
+    out[...] = fill
+    y0 = n if side == "top" else 0
+    x0 = n if side == "left" else 0
+    out[y0 : y0 + h, x0 : x0 + w] = img
+    return out
+
+
+_AA_GUARD = 1  # px of background between the line and the text
+
+
+def add_edge_lines(
+    img, sides, gap_ratio=(0.0, 0.15), thickness=(1, 3), darkness=(0.55, 1.0)
+):
+    """Table rules next to the text, as a detector box on a table cell catches.
+
+    For every side in `sides` ("top", "bottom", "left", "right") the canvas
+    grows by a random gap (share of the height), the line thickness and a
+    0-2 px outer margin, all in the background colour, and the line is drawn
+    there: it never covers letters, so the label stays valid. In 30 % of cases
+    the line is shorter than the side (a cell corner inside the crop); it can
+    be tilted by up to 1 px, its colour lies between background and ink
+    (`darkness`).
+    """
+    fill = _border_fill(img).astype(np.float64)
+    _, light_bg = _ink_threshold(img)
+    ink = np.zeros_like(fill) if light_bg else np.full_like(fill, 255.0)
+    out = img
+    for side in sides:
+        t = random.randint(*thickness)
+        gap = int(round(random.uniform(*gap_ratio) * img.shape[0]))
+        margin = random.randint(0, 2)
+        grow = gap + t + margin + _AA_GUARD
+        inner = out
+        out = _pad_side(inner, side, grow, fill.astype(img.dtype))
+        h, w = out.shape[:2]
+        vertical = side in ("left", "right")
+        across = w if vertical else h  # line centre, counted across the line
+        pos = margin + t / 2.0 if side in ("top", "left") else across - margin - t / 2.0
+        length = h if vertical else w
+        start, end = 0.0, length - 1.0
+        if random.random() < 0.3:
+            cut = random.uniform(0.05, 0.4) * length
+            if random.random() < 0.5:
+                start = cut
+            else:
+                end -= cut
+        tilt = random.uniform(-0.5, 0.5)
+        level = random.uniform(*darkness)
+        color = [float(c) for c in np.atleast_1d(fill + (ink - fill) * level)]
+        ends = [(pos - tilt, start), (pos + tilt, end)]  # (across, along)
+        scale = 16  # cv2.line takes fixed-point coordinates with shift=4
+        pts = [
+            (int(round(a * scale)), int(round(b * scale)))
+            if vertical
+            else (int(round(b * scale)), int(round(a * scale)))
+            for a, b in ends
+        ]
+        cv2.line(out, pts[0], pts[1], color if out.ndim == 3 else color[0], t, cv2.LINE_AA, 4)
+        # antialiasing of a tilted line may touch the text: put the original back
+        y0, x0 = (grow if side == "top" else 0), (grow if side == "left" else 0)
+        out[y0 : y0 + inner.shape[0], x0 : x0 + inner.shape[1]] = inner
+    return out
+
+
+def pick_edge_sides(vertical_share=0.4, two_share=0.4):
+    """One or two sides: horizontal rules (top/bottom) are the common case."""
+    sides = []
+    for _ in range(2 if random.random() < two_share else 1):
+        if random.random() < vertical_share:
+            side = random.choice(("left", "right"))
+        else:
+            side = random.choice(("top", "bottom"))
+        if side not in sides:
+            sides.append(side)
+    return sides
+
+
 class RecAug(object):
     def __init__(
         self,
@@ -170,6 +257,11 @@ class RecAug(object):
         stroke_min_height=20,
         stroke_min_ink_keep=0.6,
         stroke_max_merge=0.25,
+        edge_lines_prob=0.0,
+        edge_lines_gap=(0.0, 0.15),
+        edge_lines_thickness=(1, 3),
+        edge_lines_vertical_share=0.4,
+        edge_lines_two_share=0.4,
         **kwargs,
     ):
         # tia_max_vertical_ratio: cap of the vertical TIA distortion as a share
@@ -178,6 +270,9 @@ class RecAug(object):
         # downscale_*: lower scan resolution, the shrunk image keeps at least
         #   downscale_min_height px; jpeg_*: compression artifacts;
         # stroke_*: bolder / (carefully) thinner strokes, see change_stroke.
+        # edge_lines_*: table rules next to the text (1-2 sides), see add_edge_lines;
+        #   gap is a share of the height, vertical_share -- left/right instead of
+        #   top/bottom, two_share -- two sides at once.
         assert (
             len(rotate_ratios) == 2 and 0 < rotate_ratios[0] < rotate_ratios[1]
         ), "rotate_ratios must be increasing (r0, r1) > 0, got {}".format(rotate_ratios)
@@ -210,6 +305,19 @@ class RecAug(object):
         self.stroke_min_height = stroke_min_height
         self.stroke_min_ink_keep = stroke_min_ink_keep
         self.stroke_max_merge = stroke_max_merge
+        assert (
+            0 <= edge_lines_gap[0] <= edge_lines_gap[1]
+        ), "edge_lines_gap must be 0 <= lo <= hi, got {}".format(edge_lines_gap)
+        assert (
+            1 <= edge_lines_thickness[0] <= edge_lines_thickness[1]
+        ), "edge_lines_thickness must be 1 <= lo <= hi, got {}".format(
+            edge_lines_thickness
+        )
+        self.edge_lines_prob = edge_lines_prob
+        self.edge_lines_gap = tuple(edge_lines_gap)
+        self.edge_lines_thickness = tuple(int(t) for t in edge_lines_thickness)
+        self.edge_lines_vertical_share = edge_lines_vertical_share
+        self.edge_lines_two_share = edge_lines_two_share
         self.bda = BaseDataAugmentation(
             crop_prob, reverse_prob, noise_prob, jitter_prob, blur_prob, hsv_aug_prob
         )
@@ -244,6 +352,13 @@ class RecAug(object):
         if self.rotate_prob > 0 and random.random() < self.rotate_prob:
             limit = max_rotation_deg(w / h, self.rotate_ratios, self.rotate_degs)
             img = rotate_text(img, random.uniform(-limit, limit))
+        if self.edge_lines_prob > 0 and random.random() < self.edge_lines_prob:
+            sides = pick_edge_sides(
+                self.edge_lines_vertical_share, self.edge_lines_two_share
+            )
+            img = add_edge_lines(
+                img, sides, self.edge_lines_gap, self.edge_lines_thickness
+            )
         if self.downscale_prob > 0 and random.random() < self.downscale_prob:
             lo = max(self.downscale_range[0], self.downscale_min_height / h)
             if lo < self.downscale_range[1]:

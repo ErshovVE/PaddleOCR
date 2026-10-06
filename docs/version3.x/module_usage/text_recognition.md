@@ -1036,7 +1036,8 @@ Eval:                          # 与推理一致的验证：每个 batch 使用�
 - `RecAug` 中的文档扫描增强（默认全部关闭）：`rotate_prob` —— 小角度旋转，上限随文本行长度平滑减小
   （`rotate_ratios: [3, 30]`、`rotate_degs: [3.0, 0.6]`：单词最多 3°，w/h 为 30 时 0.6°），画布高度相应增加，不会裁切文字；
   `downscale_prob` —— 低分辨率扫描；`jpeg_prob` —— JPEG 压缩伪影；`stroke_prob` —— 笔画加粗或变细（`stroke_thin_share`），
-  会导致字符断裂或粘连的变化会被撤销。
+  会导致字符断裂或粘连的变化会被撤销；`edge_lines_prob` —— 在文字一侧或两侧添加表格线（`edge_lines_gap` 为相对高度的间距，
+  `edge_lines_thickness`），画在扩展的画布上，不覆盖文字，模拟检测框落在表格单元格上的情况。
 
 ### 4.3 模型评估
 
