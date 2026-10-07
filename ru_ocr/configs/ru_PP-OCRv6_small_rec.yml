@@ -10,7 +10,7 @@ Global:
   model_name: PP-OCRv6_small_rec
   debug: false
   use_gpu: true
-  epoch_num: 4  # fine-tuning on all data from the step-88k weights: ~14.5M samples (3.63M lines x 4, ~79k steps and ~10 h per epoch on 2x T4)
+  epoch_num: 3  # fine-tuning on all data from the step-88k weights: ~12.4M samples (4.13M lines x 3, ~90k steps and ~11 h per epoch on 2x T4)
   log_smooth_window: 20
   print_batch_step: 100
   save_model_dir: ./output/ru_PP-OCRv6_small_rec
@@ -92,7 +92,7 @@ Train:
     data_dir: ./data/ru_root/
     ext_op_transform_idx: 1
     label_file_list:
-    # synth_2m + stroyinf v2 (Soviet) + stroyinf modern (>= 1992) train parts, one file
+    # synth_2m + synth part5 (page degradation) + stroyinf v2 (Soviet) + stroyinf modern (>= 1992) train parts, one file
     - ./data/ru_labels/all_train_w_h.txt
     transforms:
     - DecodeImage:
