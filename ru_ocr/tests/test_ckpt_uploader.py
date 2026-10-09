@@ -124,3 +124,17 @@ def test_version_of_missing_dataset_creates_it_next_time(tmp_path, monkeypatch):
     monkeypatch.delenv("FAKE_KAGGLE_FAIL")
     assert up.poll_once()
     assert _calls(log)[-1][:2] == ["datasets", "create"]
+
+
+def test_custom_patterns_and_required_file(tmp_path, monkeypatch):
+    up, src, log, _ = _setup(tmp_path, monkeypatch)
+    up.patterns = ("preds_partial.tsv",)
+    up.required = "preds_partial.tsv"
+    _save(src)  # latest.* does not match the patterns
+    assert not up.poll_once()
+    path = src / "preds_partial.tsv"
+    path.write_text("0\tp\tt\t0.9\n")
+    t = time.time() - 60
+    os.utime(path, (t, t))
+    assert up.poll_once()
+    assert sorted(os.listdir(tmp_path / "stage")) == ["dataset-metadata.json", "preds_partial.tsv"]

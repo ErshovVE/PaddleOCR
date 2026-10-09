@@ -11,6 +11,8 @@ Kaggle CLI (old versions are deleted). Attach that dataset as input to resume fr
     ...                       # training
     uploader.stop()           # waits for the thread and uploads the last checkpoint
 
+Other files: patterns=("preds_partial.tsv",), required="preds_partial.tsv".
+
 The CLI reads the credentials from the environment (KAGGLE_API_TOKEN).
 """
 
@@ -32,6 +34,7 @@ class CheckpointUploader(object):
         stage_dir,
         dataset_id,
         patterns=PATTERNS,
+        required="latest.",
         settle_s=30,
         poll_s=60,
         kaggle_cmd=("kaggle",),
@@ -41,6 +44,7 @@ class CheckpointUploader(object):
         self.stage_dir = stage_dir
         self.dataset_id = dataset_id
         self.patterns = tuple(patterns)
+        self.required = required  # nothing is uploaded until a file with this name prefix exists
         self.settle_s = settle_s
         self.poll_s = poll_s
         self.kaggle_cmd = tuple(kaggle_cmd)
@@ -64,7 +68,7 @@ class CheckpointUploader(object):
     def ready(self, now=None):
         """Files of a new checkpoint that has not changed for settle_s, else None."""
         files = self.files()
-        if not any(os.path.basename(p).startswith("latest.") for p in files):
+        if not any(os.path.basename(p).startswith(self.required) for p in files):
             return None
         newest = max(os.path.getmtime(p) for p in files)
         now = time.time() if now is None else now
