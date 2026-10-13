@@ -32,7 +32,7 @@ each line gets a verdict: whom the VLM agrees with.
 Verdicts (texts compared without spaces, Latin look-alikes folded to Cyrillic): `label_ok` (VLM = label),
 `pred_ok` (VLM = our model), `label_closer` / `pred_closer` (VLM nearer by >= 2 edits), `unclear`.""")
 
-code(r"""PILOT = 1000             # lines checked (a random sample); None = all of review.tsv
+code(r"""PILOT = None             # lines checked (a random sample); None = all of review.tsv
 ENGINE = "vllm"          # "vllm" or "transformers" (slower fallback, batch 1)
 MODEL_ID = "PaddlePaddle/PaddleOCR-VL-1.6"
 GPUS = 2
@@ -41,6 +41,7 @@ MAX_TOKENS = 256         # generation limit per line
 SEED = 0
 OUT_DATASET = "vladislavershov/ru-ocr-stroyinf-vlm"  # parts uploaded here every 10 min; None: no upload
 WORK = "/kaggle/working"
+VLLM_PY = "/tmp/vv/bin/python"  # the venv with vllm, made by the install cell
 import os, subprocess, sys, time
 print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv"], capture_output=True, text=True).stdout)""")
 
@@ -69,37 +70,34 @@ def sh(cmd, timeout=1800, attempts=3):
 
 
 PIP = f"{shlex.quote(sys.executable)} -m pip install --progress-bar off --timeout 120 --retries 10"
-sh(f"rm -rf {WORK}/PaddleOCR && git clone -q --depth 1 --branch feat/ru-ppocrv6-small-training "
-   f"https://github.com/ErshovVE/PaddleOCR.git {WORK}/PaddleOCR")
-sys.path.insert(0, f"{WORK}/PaddleOCR/ru_ocr/tools")
-# The Kaggle image has torch 2.11.0+cu128 and transformers 5.x: the transformers engine needs no install.
-# vllm: the CUDA 12 wheel of 0.26.0 (PyPI builds are CUDA 13) with --no-deps, then its dependencies from
-# ru_ocr/kaggle/requirements_vlm.txt under constraints = the image's torch family, so pip cannot replace them
-# (vllm 0.27+ swaps torch for 2.13/CUDA 13; torchcodec>=0.14 is a CUDA 13 build that fails on import).
+sh(f"{PIP} rapidfuzz --upgrade kaggle uv")
+# The Kaggle image (Python 3.13, torch 2.11.0+cu128, transformers 5.x) runs the transformers engine as it is.
+# vllm goes into its own venv, VLLM_PY, and only the vllm workers run there, so the image is never touched.
+# The image sets UV_SYSTEM_PYTHON=true (uv would install into the image): it is unset for every uv call.
+# vllm 0.26.0+cu129 (PyPI builds are CUDA 13) brings torch 2.11.0+cu129 and torchcodec 0.17, a CUDA 13 build
+# that fails on import (libnvrtc.so.13); vllm imports it on start, so 0.11.0+cu129 (the torch 2.11 pair) replaces it.
 VLLM_WHEEL = ("https://github.com/vllm-project/vllm/releases/download/v0.26.0/"
               "vllm-0.26.0+cu129-cp38-abi3-manylinux_2_28_x86_64.whl")
-from importlib.metadata import version
-IMAGE = {p: version(p) for p in ("torch", "torchvision", "torchaudio", "torchcodec")}
-with open("/tmp/image_constraints.txt", "w") as f:
-    f.writelines(f"{p}=={v}\n" for p, v in IMAGE.items())
-print("image:", IMAGE)
-if ENGINE == "vllm":
-    sh(f"{PIP} --no-deps 'vllm @ {VLLM_WHEEL}'")
-    sh(f"{PIP} -r {WORK}/PaddleOCR/ru_ocr/kaggle/requirements_vlm.txt -c /tmp/image_constraints.txt")
-sh(f"{PIP} rapidfuzz --upgrade kaggle")
+UV = "env -u UV_SYSTEM_PYTHON -u VIRTUAL_ENV UV_NO_CONFIG=1 uv"
+CU129 = "https://download.pytorch.org/whl/cu129"
 
 
-def check(code):
-    res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+def check(code, py=sys.executable):
+    res = subprocess.run([py, "-c", code], capture_output=True, text=True)
     print(res.stdout.strip(), res.stderr.strip()[-1500:] if res.returncode else "", flush=True)
     return res.returncode == 0
 
 
-assert check("import torch, torchcodec; print('torch', torch.__version__, 'torchcodec', torchcodec.__version__)")
-assert version("torch") == TORCH or TORCH.startswith(version("torch")), "the install replaced torch"
-if ENGINE == "vllm" and not check("from vllm import LLM; print('vllm imports')"):
-    print("vllm does not import: the transformers engine is used", flush=True)
-    ENGINE = "transformers"
+if ENGINE == "vllm":
+    sh(f"rm -rf /tmp/vv && {UV} venv /tmp/vv --python 3.12 -q")
+    sh(f"{UV} pip install --python {VLLM_PY} 'vllm @ {VLLM_WHEEL}' --extra-index-url {CU129} "
+       "--index-strategy unsafe-best-match")
+    sh(f"{UV} pip install --python {VLLM_PY} --no-deps --reinstall torchcodec==0.11.0 --index-url {CU129}")
+    if not check("import torch, vllm; from vllm import LLM; print('venv: torch', torch.__version__, "
+                 "'vllm', vllm.__version__, 'cuda', torch.cuda.is_available())", VLLM_PY):
+        print("vllm does not import: the transformers engine is used", flush=True)
+        ENGINE = "transformers"
+assert check("import torch, torchcodec; print('image: torch', torch.__version__, 'torchcodec', torchcodec.__version__)")
 sh(f"rm -rf {WORK}/PaddleOCR && git clone -q --depth 1 --branch feat/ru-ppocrv6-small-training "
    f"https://github.com/ErshovVE/PaddleOCR.git {WORK}/PaddleOCR")
 sys.path.insert(0, f"{WORK}/PaddleOCR/ru_ocr/tools")""")
@@ -140,6 +138,9 @@ for path in parts:
             i, text, score = line.rstrip("\n").split("\t")
             vlm[int(i)] = (text, float(score))
 todo = [i for i in order if i not in vlm]
+for name in os.listdir(WORK):  # parts of an earlier Run All in this session: the workers would skip their lines
+    if name.startswith(("vlm_part", "vlm_worker")) and name.endswith((".tsv", ".log")):
+        os.remove(os.path.join(WORK, name))
 print(len(order), "lines to check,", len(order) - len(todo), "done earlier,", len(todo), "to do")
 with open(f"{WORK}/vlm_earlier.tsv", "w", encoding="utf-8") as f:  # keeps the earlier lines in this output
     f.writelines(f"{i}\t{t}\t{s}\n" for i, (t, s) in vlm.items())
@@ -237,12 +238,14 @@ if OUT_DATASET:
         print("parts are NOT uploaded (no KAGGLE_API_TOKEN secret?):", exc)
 
 def run_workers(engine):
-    # one worker per GPU; their new log lines are printed every minute; True when all of them finish
+    # one worker per GPU (vllm ones in the venv); their new log lines are printed every minute; True when all finish
     workers, logs = [], [f"{WORK}/vlm_worker{k}.log" for k in range(GPUS)]
+    py = VLLM_PY if engine == "vllm" else sys.executable
+    assert os.path.exists(py), f"{py} is missing: run the install cell (section 0) first"
     for k in range(GPUS):
         env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(k))
         workers.append(subprocess.Popen(
-            [sys.executable, f"{WORK}/vlm_worker.py", f"{WORK}/vlm_todo.tsv", str(k), str(GPUS),
+            [py, f"{WORK}/vlm_worker.py", f"{WORK}/vlm_todo.tsv", str(k), str(GPUS),
              f"{WORK}/vlm_part{k}.tsv", engine, MODEL_ID, str(SAVE_EVERY), str(MAX_TOKENS)],
             stdout=open(logs[k], "a"), stderr=subprocess.STDOUT, env=env))
     seen = [0] * GPUS
