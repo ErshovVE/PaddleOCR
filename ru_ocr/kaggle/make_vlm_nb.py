@@ -39,7 +39,7 @@ GPUS = 2
 SAVE_EVERY = 500         # lines per worker between appends to vlm_part{k}.tsv
 MAX_TOKENS = 256         # generation limit per line
 SEED = 0
-OUT_DATASET = "vladislavershov/ru-ocr-stroyinf-vlm"  # parts uploaded here every 10 min; None: no upload
+OUT_DATASET = "vladislavershov/ru-ocr-stroyinf-vlm-spaces"  # parts uploaded here every 10 min; None: no upload
 WORK = "/kaggle/working"
 VLLM_PY = "/tmp/vv/bin/python"  # the venv with vllm, made by the install cell
 import os, subprocess, sys, time
