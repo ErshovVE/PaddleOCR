@@ -15,11 +15,12 @@ def code(src):
 
 md(r"""# RU OCR: third opinion on the stroyinf disagreements with PaddleOCR-VL
 
-`review.tsv` holds the stroyinf v2 lines where our model (`pred`) and the text-layer label (`label`) differ in
-characters (111 980 lines). Here a VLM, **PaddleOCR-VL** (0.9B, `OCR:` prompt), reads every crop on its own, and
+`review.tsv` (lines that differ in characters) and `review_spaces.tsv` (lines that differ only in spaces) hold the
+stroyinf lines where our model (`pred`) and the text-layer label (`label`) differ; both are checked in one run. Here a VLM, **PaddleOCR-VL** (0.9B, `OCR:` prompt), reads every crop on its own, and
 each line gets a verdict: whom the VLM agrees with.
 
-**Input**: `ru-ocr-stroyinf` (crops), `ru-ocr-stroyinf-review` (`review.tsv`). To resume: also `OUT_DATASET`.
+**Input**: the crops (`ru-ocr-stroyinf` / `ru-ocr-stroyinf-modern`) and the output of `ru_predict_stroyinf`
+(`review.tsv`, `review_spaces.tsv`; Add Input -> Notebook Output). To resume: also `OUT_DATASET`.
 **Settings**: Accelerator **GPU T4 x2**, Internet on, Add-ons -> Secrets: `KAGGLE_API_TOKEN`. Save & Run All.
 
 - One worker process per GPU (`vlm_worker.py`, vLLM; `ENGINE = "transformers"` as a fallback), each takes every
@@ -28,18 +29,20 @@ each line gets a verdict: whom the VLM agrees with.
   every 10 min (a growing dataset = the run is alive). Parts found under `/kaggle/input` are skipped.
 - The worker logs are printed here every minute.
 
-**Output**: `review_vlm.tsv` (`review.tsv` + `vlm`, `vlm_score`, `verdict`), the verdict counts.
-Verdicts (texts compared without spaces, Latin look-alikes folded to Cyrillic): `label_ok` (VLM = label),
-`pred_ok` (VLM = our model), `label_closer` / `pred_closer` (VLM nearer by >= 2 edits), `unclear`.""")
+**Output**: `review_vlm.tsv` (both review tables + `vlm`, `vlm_score`, `verdict`), the verdict counts.
+Verdicts: `label_ok` (VLM = label), `pred_ok` (VLM = our model), `disputed`. Only the VLM text is normalized
+(whitespace runs -> one space, ends stripped); label and pred are compared as they are, spaces included
+(the same rule as `ru_ocr/tools/clean_labels_vlm.py`).""")
 
-code(r"""PILOT = None             # lines checked (a random sample); None = all of review.tsv
+code(r"""REVIEWS = ["review.tsv", "review_spaces.tsv"]  # tables under /kaggle/input, checked together
+PILOT = None             # lines checked (a random sample); None = all lines of REVIEWS
 ENGINE = "vllm"          # "vllm" or "transformers" (slower fallback, batch 1)
 MODEL_ID = "PaddlePaddle/PaddleOCR-VL-1.6"
 GPUS = 2
 SAVE_EVERY = 500         # lines per worker between appends to vlm_part{k}.tsv
 MAX_TOKENS = 256         # generation limit per line
 SEED = 0
-OUT_DATASET = "vladislavershov/ru-ocr-stroyinf-vlm-spaces"  # parts uploaded here every 10 min; None: no upload
+OUT_DATASET = "vladislavershov/ru-ocr-stroyinf-modern-vlm"  # parts uploaded here every 10 min; None: no upload
 WORK = "/kaggle/working"
 VLLM_PY = "/tmp/vv/bin/python"  # the venv with vllm, made by the install cell
 import os, subprocess, sys, time
@@ -102,13 +105,13 @@ sh(f"rm -rf {WORK}/PaddleOCR && git clone -q --depth 1 --branch feat/ru-ppocrv6-
    f"https://github.com/ErshovVE/PaddleOCR.git {WORK}/PaddleOCR")
 sys.path.insert(0, f"{WORK}/PaddleOCR/ru_ocr/tools")""")
 
-md("## 1. Data\nThe `review.tsv` paths start with `stroyinf/<folder>/crops/...`: the folders with `crops/` are linked into `/tmp/ru_root/stroyinf`.")
+md("## 1. Data\nThe review paths start with `stroyinf/<folder>/crops/...`: the folders with `crops/` are linked into `/tmp/ru_root/stroyinf`.")
 
 code(r"""import csv, random
 
 ROOT = "/tmp/ru_root"
 os.makedirs(os.path.join(ROOT, "stroyinf"), exist_ok=True)
-review_path, parts = None, []
+review_paths, parts = {}, []
 for top, dirs, files in os.walk("/kaggle/input"):
     if "crops" in dirs:
         dirs.remove("crops")
@@ -116,12 +119,17 @@ for top, dirs, files in os.walk("/kaggle/input"):
             link = os.path.join(ROOT, "stroyinf", os.path.basename(top))
             if not os.path.exists(link):
                 os.symlink(top, link)
-    if "review.tsv" in files:
-        review_path = os.path.join(top, "review.tsv")
+    for name in REVIEWS:
+        if name in files:
+            review_paths.setdefault(name, []).append(os.path.join(top, name))
     parts += [os.path.join(top, f) for f in files if f.startswith("vlm_part") and f.endswith(".tsv")]
-assert review_path, "attach ru-ocr-stroyinf-review"
-with open(review_path, encoding="utf-8") as f:
-    review = list(csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE))
+assert all(len(review_paths.get(n, [])) == 1 for n in REVIEWS), f"need exactly one of each {REVIEWS}: {review_paths}"
+review = []  # line indices run over the tables in REVIEWS order
+for name in REVIEWS:
+    with open(review_paths[name][0], encoding="utf-8") as f:
+        rows = list(csv.DictReader(f, delimiter="\t", quoting=csv.QUOTE_NONE))
+    print(name, len(rows), "lines")
+    review += [dict(r, review=name) for r in rows]
 missing = [r["path"] for r in review[:200] if not os.path.exists(os.path.join(ROOT, r["path"]))]
 assert not missing, f"crops not found, e.g. {missing[:3]}"
 print("stroyinf folders:", len(os.listdir(os.path.join(ROOT, "stroyinf"))), "review lines:", len(review))
@@ -287,7 +295,6 @@ assert ok, ("the workers failed, see the log tails above")""")
 md("## 4. Verdicts")
 
 code(r"""import pandas as pd
-from rapidfuzz.distance import Levenshtein
 
 for k in range(GPUS):
     path = f"{WORK}/vlm_part{k}.tsv"
@@ -299,26 +306,14 @@ for k in range(GPUS):
 missing = [i for i in order if i not in vlm]
 assert not missing, f"{len(missing)} lines without a VLM text"
 
-# Latin look-alikes -> Cyrillic, spaces dropped: the VLM and the text layer mix the two alphabets
-FOLD = str.maketrans("ABCEHKMOPTXYaceopxy", "АВСЕНКМОРТХУасеорху")
-
-
-def norm(s):
-    return s.replace(" ", "").translate(FOLD)
-
-
 def verdict(label, pred, text):
-    lab, prd, txt = norm(label), norm(pred), norm(text)
-    if txt == lab:
+    # only the VLM text is normalized; label and pred stay as they are, spaces count
+    txt = " ".join(text.split())
+    if txt == label:
         return "label_ok"
-    if txt == prd:
+    if txt == pred:
         return "pred_ok"
-    dl, dp = Levenshtein.distance(txt, lab), Levenshtein.distance(txt, prd)
-    if dl + 2 <= dp:
-        return "label_closer"
-    if dp + 2 <= dl:
-        return "pred_closer"
-    return "unclear"
+    return "disputed"
 
 
 df = pd.DataFrame([review[i] for i in order])
@@ -326,7 +321,7 @@ df["vlm"] = [vlm[i][0] for i in order]
 df["vlm_score"] = [vlm[i][1] for i in order]
 df["verdict"] = [verdict(l, p, t) for l, p, t in zip(df.label, df.pred, df.vlm)]
 df.to_csv(f"{WORK}/review_vlm.tsv", sep="\t", index=False, quoting=csv.QUOTE_NONE)
-print(df.verdict.value_counts().to_string())
+print(pd.crosstab(df.verdict, df.review, margins=True).to_string())
 print()
 print(pd.crosstab(pd.cut(df.score.astype(float), [0, 0.5, 0.8, 0.9, 0.95, 1.0]), df.verdict))
 pd.set_option("display.max_colwidth", 60)
