@@ -92,8 +92,9 @@ Train:
     data_dir: ./data/ru_root/
     ext_op_transform_idx: 1
     label_file_list:
-    # synth_2m + synth part5 (page degradation) + stroyinf v2 (Soviet) + stroyinf modern (>= 1992) train parts, one file
-    - ./data/ru_labels/all_train_w_h.txt
+    # synth_2m + synth part5 (page degradation) + stroyinf v2 (Soviet) + stroyinf modern (>= 1992) train parts, one file;
+    # _clean: stroyinf labels cleaned with the model predictions and PaddleOCR-VL (ru_ocr/tools/clean_labels_vlm.py)
+    - ./data/ru_labels/all_train_clean_w_h.txt
     transforms:
     - DecodeImage:
         img_mode: BGR
@@ -166,8 +167,9 @@ Eval:
     ds_width: true
     data_dir: ./data/ru_root/
     label_file_list:
-    # 5 000 random lines of all_val_w_h.txt (50 565: stroyinf v2 val folder + tail 2 % of stroyinf modern)
-    - ./data/ru_labels/all_val5k_w_h.txt
+    # 5 000 random lines of all_val_w_h.txt (50 565: stroyinf v2 val folder + tail 2 % of stroyinf modern);
+    # _clean: the same lines cleaned like the train labels, 4 241 left
+    - ./data/ru_labels/all_val5k_clean_w_h.txt
     transforms:
     - DecodeImage:
         img_mode: BGR
