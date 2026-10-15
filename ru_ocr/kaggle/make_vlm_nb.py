@@ -157,8 +157,9 @@ vlm = {}
 for path in parts:
     with open(path, encoding="utf-8") as f:
         for line in f:
-            i, text, score = line.rstrip("\n").split("\t")
-            vlm[int(i)] = (text, float(score))
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) == 3:  # skips a line cut by an upload taken mid-append
+                vlm[int(fields[0])] = (fields[1], float(fields[2]))
 todo = [i for i in order if i not in vlm]
 for name in os.listdir(WORK):  # parts of an earlier Run All in this session: the workers would skip their lines
     if name.startswith(("vlm_part", "vlm_worker")) and name.endswith((".tsv", ".log")):
@@ -253,7 +254,7 @@ if OUT_DATASET:
         from kaggle_secrets import UserSecretsClient
         os.environ["KAGGLE_API_TOKEN"] = UserSecretsClient().get_secret("KAGGLE_API_TOKEN")
         from ckpt_uploader import CheckpointUploader
-        uploader = CheckpointUploader(WORK, "/tmp/vlm_upload", OUT_DATASET, poll_s=600,
+        uploader = CheckpointUploader(WORK, "/tmp/vlm_upload", OUT_DATASET, poll_s=600, settle_s=5,
                                       patterns=("vlm_part*.tsv", "vlm_earlier.tsv"), required="vlm_part").start()
         print("parts are uploaded to", OUT_DATASET)
     except Exception as exc:
@@ -315,8 +316,9 @@ for k in range(GPUS):
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
             for line in f:
-                i, text, score = line.rstrip("\n").split("\t")
-                vlm[int(i)] = (text, float(score))
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) == 3:
+                    vlm[int(fields[0])] = (fields[1], float(fields[2]))
 missing = [i for i in order if i not in vlm]
 assert not missing, f"{len(missing)} lines without a VLM text"
 
