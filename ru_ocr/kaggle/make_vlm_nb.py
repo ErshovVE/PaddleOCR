@@ -46,7 +46,14 @@ OUT_DATASET = "vladislavershov/ru-ocr-stroyinf-modern-vlm"  # parts uploaded her
 WORK = "/kaggle/working"
 VLLM_PY = "/tmp/vv/bin/python"  # the venv with vllm, made by the install cell
 import os, subprocess, sys, time
-print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv"], capture_output=True, text=True).stdout)""")
+print(subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv"], capture_output=True, text=True).stdout)
+if OUT_DATASET:  # fail at once: without the secret nothing is uploaded and a long run leaves no trace until it ends
+    from kaggle_secrets import UserSecretsClient
+    try:
+        UserSecretsClient().get_secret("KAGGLE_API_TOKEN")
+    except Exception as exc:
+        raise RuntimeError("attach the KAGGLE_API_TOKEN secret (Add-ons -> Secrets; Kaggle drops it when a "
+                           "notebook file is imported) or set OUT_DATASET = None") from exc""")
 
 md("## 0. Packages, code")
 
@@ -111,6 +118,13 @@ code(r"""import csv, random
 
 ROOT = "/tmp/ru_root"
 os.makedirs(os.path.join(ROOT, "stroyinf"), exist_ok=True)
+# crops packed as *.tarpack (plain tar, see ru_ocr/tools/pack_dataset.py --format tar) are unpacked into ROOT,
+# their paths already start with stroyinf/<folder>/crops/
+for top, dirs, files in os.walk("/kaggle/input"):
+    for name in sorted(f for f in files if f.endswith(".tarpack")):
+        start = time.time()
+        subprocess.run(["tar", "-xf", os.path.join(top, name), "-C", ROOT], check=True)
+        print(f"unpacked {name} in {time.time() - start:.0f} s", flush=True)
 review_paths, parts = {}, []
 for top, dirs, files in os.walk("/kaggle/input"):
     if "crops" in dirs:

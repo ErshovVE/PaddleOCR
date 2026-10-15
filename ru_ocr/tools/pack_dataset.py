@@ -14,11 +14,16 @@ unpacked (or mounted) side by side and used with the same label files.
 (synth/part1, synth/part2, ..., stroyinf/<folder>); groups smaller than --min-group-mb are
 merged into one archive of their top folder (all stroyinf folders -> stroyinf.zip).
 The label files go into labels.zip. WebP crops are already compressed: ZIP_STORED.
+
+--format tar writes plain uncompressed tar files named *.tarpack instead: Kaggle unpacks an uploaded .zip back
+into single files, and a notebook then waits hours while a million crops are fetched one by one; a .tarpack is
+not recognised as an archive, stays one file and is unpacked by the notebook (tar -xf) in a minute.
 """
 
 import argparse
 import os
 import sys
+import tarfile
 import zipfile
 from collections import defaultdict
 
@@ -63,6 +68,15 @@ def write_zip(target, root, paths):
             z.write(os.path.join(root, path), path)
 
 
+def write_tar(target, root, paths):
+    with tarfile.open(target, "w", format=tarfile.PAX_FORMAT) as t:
+        for path in paths:
+            t.add(os.path.join(root, path), path, recursive=False)
+
+
+WRITERS = {"zip": (".zip", write_zip), "tar": (".tarpack", write_tar)}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--root", required=True, help="data_dir the label paths are relative to")
@@ -70,6 +84,7 @@ def main(argv=None):
     parser.add_argument("--group-depth", type=int, default=2)
     parser.add_argument("--min-group-mb", type=float, default=1000)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--format", choices=sorted(WRITERS), default="zip", help="zip, or tar written as *.tarpack")
     args = parser.parse_args(argv)
 
     paths = read_paths(args.labels)
@@ -78,9 +93,10 @@ def main(argv=None):
         parser.error("{} label paths do not exist under {}, e.g. {}".format(len(missing), args.root, missing[0]))
     archives = plan_archives(args.root, group_paths(paths, args.group_depth), args.min_group_mb * 1e6)
     os.makedirs(args.out, exist_ok=True)
+    ext, write = WRITERS[args.format]
     for name, files in archives.items():
-        target = os.path.join(args.out, name + ".zip")
-        write_zip(target, args.root, files)
+        target = os.path.join(args.out, name + ext)
+        write(target, args.root, files)
         print("{}: {} files, {:.2f} GB".format(target, len(files), os.path.getsize(target) / 1e9), flush=True)
     with zipfile.ZipFile(os.path.join(args.out, "labels.zip"), "w", zipfile.ZIP_DEFLATED) as z:
         for label_file in args.labels:
