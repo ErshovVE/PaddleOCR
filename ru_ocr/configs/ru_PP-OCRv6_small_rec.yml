@@ -10,7 +10,7 @@ Global:
   model_name: PP-OCRv6_small_rec
   debug: false
   use_gpu: true
-  epoch_num: 3  # fine-tuning on all data from the step-88k weights: ~12.4M samples (4.13M lines x 3, ~90k steps and ~11 h per epoch on 2x T4)
+  epoch_num: 2  # ft4: fine-tuning on the cleaned labels from the ft3 best_accuracy weights (step 100k): ~8M samples (4.0M lines x 2, ~87k steps and ~11 h per epoch on 2x T4)
   log_smooth_window: 20
   print_batch_step: 100
   save_model_dir: ./output/ru_PP-OCRv6_small_rec
@@ -37,7 +37,7 @@ Optimizer:
   beta2: 0.999
   lr:
     name: Cosine
-    learning_rate: 0.0005  # the LR of the step-88k checkpoint (1 warmup epoch, then barely into the cosine)
+    learning_rate: 0.0005  # as in ft3 (the LR of the step-88k checkpoint: 1 warmup epoch, then barely into the cosine)
     warmup_epoch: 0  # starts from trained weights: decay right away
   regularizer:
     name: L2
