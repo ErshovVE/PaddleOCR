@@ -156,12 +156,12 @@ def clean_file(label_file, preds, verdicts):
     return out_file, stats
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--preds", nargs="+", required=True, help="TSVs with path, pred (preds_all.tsv.gz)")
     parser.add_argument("--vlm", nargs="+", required=True, help="review tables with path, label, pred, vlm")
     parser.add_argument("--labels", nargs="+", required=True, help="label files to clean")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     preds = {}
     for table in args.preds:
@@ -177,7 +177,8 @@ def main():
         print(f"{label_file} -> {out_file}: {kept} lines")
         for key, n in stats.most_common():
             print(f"  {n:8d}  {key}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

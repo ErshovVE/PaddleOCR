@@ -1,3 +1,4 @@
+import tarfile
 import zipfile
 
 from conftest import load_tool
@@ -34,6 +35,47 @@ def test_packs_label_paths_grouped_and_merges_small_groups(tmp_path):
         assert sorted(z.namelist()) == sorted(small)
     with zipfile.ZipFile(out / "labels.zip") as z:
         assert z.namelist() == ["labels/train.txt"]
+
+
+def test_tar_format_writes_tarpacks_with_the_label_paths(tmp_path):
+    root = tmp_path / "ru_root"
+    paths = ["stroyinf/f1/crops/0/a.webp", "stroyinf/f1/crops/1/b.webp"]
+    for p in paths:
+        _crop(root, p, 10)
+    labels = tmp_path / "val.txt"
+    labels.write_text("".join("{}\tтекст\t10\t5\n".format(p) for p in paths), encoding="utf-8")
+    out = tmp_path / "out"
+
+    assert pk.main(["--root", str(root), "--labels", str(labels), "--format", "tar", "--out", str(out)]) == 0
+
+    assert sorted(p.name for p in out.iterdir()) == ["labels.zip", "stroyinf.tarpack"]
+    with tarfile.open(out / "stroyinf.tarpack") as t:
+        assert sorted(t.getnames()) == paths
+        assert t.extractfile(paths[0]).read() == b"x" * 10
+
+
+def test_from_zip_repacks_every_file_with_its_name_and_bytes(tmp_path):
+    source = tmp_path / "synth_part1.zip"
+    files = {"synth/part1/crops/0/a.webp": b"abc", "synth/part1/crops/1/b.webp": b"defg"}
+    with zipfile.ZipFile(source, "w", zipfile.ZIP_STORED) as z:
+        z.writestr("synth/part1/crops/", "")  # a directory entry is skipped
+        for name, data in files.items():
+            z.writestr(name, data)
+    out = tmp_path / "out"
+
+    assert pk.main(["--from-zip", str(source), "--out", str(out)]) == 0
+
+    with tarfile.open(out / "synth_part1.tarpack") as t:
+        assert sorted(t.getnames()) == sorted(files)
+        assert {n: t.extractfile(n).read() for n in files} == files
+
+
+def test_without_from_zip_root_and_labels_are_required(tmp_path, capsys):
+    try:
+        pk.main(["--out", str(tmp_path / "out")])
+    except SystemExit as exc:
+        assert exc.code == 2
+    assert "--root and --labels are required" in capsys.readouterr().err
 
 
 def test_missing_crop_is_an_error(tmp_path, capsys):

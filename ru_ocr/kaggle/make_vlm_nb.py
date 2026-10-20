@@ -34,7 +34,10 @@ Verdicts: `label_ok` (VLM = label), `pred_ok` (VLM = our model), `disputed`. Onl
 (whitespace runs -> one space, ends stripped); label and pred are compared as they are, spaces included
 (the same rule as `ru_ocr/tools/clean_labels_vlm.py`).""")
 
-code(r"""REVIEWS = ["review.tsv", "review_spaces.tsv"]  # tables under /kaggle/input, checked together
+code(r"""KAGGLE_USER = "vladislavershov"  # owner of the private Kaggle datasets the notebook writes to
+REPO = "https://github.com/ErshovVE/PaddleOCR.git"  # cloned for the configs and ru_ocr/tools
+BRANCH = "feat/ru-ppocrv6-small-training"
+REVIEWS = ["review.tsv", "review_spaces.tsv"]  # tables under /kaggle/input, checked together
 PILOT = None             # lines checked (a random sample); None = all lines of REVIEWS
 ENGINE = "vllm"          # "vllm" or "transformers" (slower fallback, batch 1)
 MODEL_ID = "PaddlePaddle/PaddleOCR-VL-1.6"
@@ -42,7 +45,7 @@ GPUS = 2
 SAVE_EVERY = 500         # lines per worker between appends to vlm_part{k}.tsv
 MAX_TOKENS = 256         # generation limit per line
 SEED = 0
-OUT_DATASET = "vladislavershov/ru-ocr-stroyinf-modern-vlm"  # parts uploaded here every 10 min; None: no upload
+OUT_DATASET = f"{KAGGLE_USER}/ru-ocr-stroyinf-modern-vlm"  # parts uploaded here every 10 min; None: no upload
 WORK = "/kaggle/working"
 VLLM_PY = "/tmp/vv/bin/python"  # the venv with vllm, made by the install cell
 import os, subprocess, sys, time
@@ -108,8 +111,7 @@ if ENGINE == "vllm":
         print("vllm does not import: the transformers engine is used", flush=True)
         ENGINE = "transformers"
 assert check("import torch, torchcodec; print('image: torch', torch.__version__, 'torchcodec', torchcodec.__version__)")
-sh(f"rm -rf {WORK}/PaddleOCR && git clone -q --depth 1 --branch feat/ru-ppocrv6-small-training "
-   f"https://github.com/ErshovVE/PaddleOCR.git {WORK}/PaddleOCR")
+sh(f"rm -rf {WORK}/PaddleOCR && git clone -q --depth 1 --branch {BRANCH} {REPO} {WORK}/PaddleOCR")
 sys.path.insert(0, f"{WORK}/PaddleOCR/ru_ocr/tools")""")
 
 md("## 1. Data\nThe review paths start with `stroyinf/<folder>/crops/...`: the folders with `crops/` are linked into `/tmp/ru_root/stroyinf`.")
@@ -311,7 +313,7 @@ md("## 4. Verdicts")
 
 code(r"""import pandas as pd
 
-for k in range(GPUS):
+for k in range(GPUS):  # every line has a reading (the workers finished)
     path = f"{WORK}/vlm_part{k}.tsv"
     if os.path.exists(path):
         with open(path, encoding="utf-8") as f:
@@ -321,27 +323,18 @@ for k in range(GPUS):
                     vlm[int(fields[0])] = (fields[1], float(fields[2]))
 missing = [i for i in order if i not in vlm]
 assert not missing, f"{len(missing)} lines without a VLM text"
-
-def verdict(label, pred, text):
-    # only the VLM text is normalized; label and pred stay as they are, spaces count
-    txt = " ".join(text.split())
-    if txt == label:
-        return "label_ok"
-    if txt == pred:
-        return "pred_ok"
-    return "disputed"
-
-
-df = pd.DataFrame([review[i] for i in order])
-df["vlm"] = [vlm[i][0] for i in order]
-df["vlm_score"] = [vlm[i][1] for i in order]
-df["verdict"] = [verdict(l, p, t) for l, p, t in zip(df.label, df.pred, df.vlm)]
-df.to_csv(f"{WORK}/review_vlm.tsv", sep="\t", index=False, quoting=csv.QUOTE_NONE)
-print(pd.crosstab(df.verdict, df.review, margins=True).to_string())
-print()
-print(pd.crosstab(pd.cut(df.score.astype(float), [0, 0.5, 0.8, 0.9, 0.95, 1.0]), df.verdict))
-pd.set_option("display.max_colwidth", 60)
-df.sample(min(30, len(df)), random_state=0)[["label", "pred", "vlm", "verdict"]]""")
+# review_vlm.tsv = the review tables + review, vlm, vlm_score, verdict: ru_ocr/tools/vlm_review.py, the same rule
+# (clean_labels_vlm.vlm_verdict) as the label cleaning; PILOT lines only get a verdict when PILOT is None
+if PILOT is None:
+    parts = [f"{WORK}/{name}" for name in os.listdir(WORK) if name.startswith("vlm_") and name.endswith(".tsv")
+             and (name.startswith("vlm_part") or name == "vlm_earlier.tsv")]
+    sh(f"{shlex.quote(sys.executable)} {WORK}/PaddleOCR/ru_ocr/tools/vlm_review.py --reviews "
+       + " ".join(review_paths[name][0] for name in REVIEWS) + " --parts " + " ".join(parts)
+       + f" --out {WORK}/review_vlm.tsv")
+    df = pd.read_csv(f"{WORK}/review_vlm.tsv", sep="\t", quoting=3, keep_default_na=False)
+    print(pd.crosstab(df.verdict, df.review, margins=True).to_string())
+    pd.set_option("display.max_colwidth", 60)
+    df.sample(min(30, len(df)), random_state=0)[["label", "pred", "vlm", "verdict"]]""")
 
 nb = {
     "cells": [],
