@@ -110,7 +110,7 @@
 согласны против неё.
 
 1. **Предсказания.** ft3 читает все 1 692 333 реальные строки (v2 — на CPU через OpenVINO, modern — на 2× T4 через
-   Paddle; `kaggle/ru_predict_stroyinf.ipynb`). `tools/build_review.py` выделяет расхождения:
+   Paddle; `kaggle/ru_export_eval_predict.ipynb`). `tools/build_review.py` выделяет расхождения:
 
    | | Строк | Модель = метка | Расходятся по буквам | Только пробелами |
    |---|---|---|---|---|
@@ -200,9 +200,9 @@
 | Разметка с шириной / высотой, деление train/val, слияние | `tools/add_wh.py`, `tools/merge_labels.py` |
 | Архивы для Kaggle | `tools/pack_dataset.py --format tar` (или `--from-zip`) |
 | Обучение | `kaggle/ru_train_2xT4.ipynb` + `configs/ru_PP-OCRv6_small_rec.yml` |
-| Предсказания на реальных строках, таблицы расхождений | `kaggle/ru_predict_stroyinf.ipynb` (`RUN_PREDICTIONS = True`), `tools/build_review.py` |
+| Предсказания на реальных строках, таблицы расхождений | `kaggle/ru_export_eval_predict.ipynb` (`RUN_PREDICTIONS = True`), `tools/build_review.py` |
 | Проверка VLM | `kaggle/ru_vlm_check_stroyinf.ipynb` (собирается `kaggle/make_vlm_nb.py`), `tools/vlm_review.py` |
 | Очищенная разметка | `tools/clean_labels_vlm.py` |
-| Экспорт, ONNX, тест чекпоинтов | `kaggle/ru_predict_stroyinf.ipynb` (разделы 1–3b) |
+| Экспорт, ONNX, тест чекпоинтов | `kaggle/ru_export_eval_predict.ipynb` (разделы 1–3b) |
 
 Подробности каждого шага и команды — в [README.md](README.md).

@@ -1,6 +1,6 @@
 """Join model predictions with the label files and split out the lines where they disagree.
 
-The prediction notebook (ru_ocr/kaggle/ru_predict_stroyinf.ipynb) writes preds_partial.tsv: one line per
+The prediction notebook (ru_ocr/kaggle/ru_export_eval_predict.ipynb) writes preds_partial.tsv: one line per
 predicted label line, `index<TAB>path<TAB>pred<TAB>score`, where index is the line number in the label files
 read one after another. This tool writes three tables with a header next to each other:
 

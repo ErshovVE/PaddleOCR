@@ -36,7 +36,7 @@
 | `tools/validate_models.py` | проверка экспортированных моделей через `TextRecognition`: точность и редакционное расстояние по длине и группам |
 | `tools/convert_torchocr_rec.py` | перенос весов torchocr в `.pdparams`, сверка с ONNX, перенумерация выходных слоёв под новый словарь |
 | `kaggle/ru_train_2xT4.ipynb` | обучение на Kaggle 2× T4 в 12-часовых сессиях с выгрузкой чекпоинтов и продолжением |
-| `kaggle/ru_predict_stroyinf.ipynb` | экспорт, ONNX, сверка бэкендов, тест чекпоинтов, предсказания на реальных строках |
+| `kaggle/ru_export_eval_predict.ipynb` | экспорт, ONNX, сверка бэкендов, тест чекпоинтов, предсказания на реальных строках |
 | `kaggle/ru_vlm_check_stroyinf.ipynb` | чтение спорных строк VLM (PaddleOCR-VL через vLLM); собирается `kaggle/make_vlm_nb.py` |
 | `tests/` | тесты инструментов и конфигов, сквозное smoke-обучение (`resource_intensive`) |
 
@@ -108,7 +108,7 @@ python -m paddle.distributed.launch --gpus 0,1 tools/train.py -c ru_ocr/configs/
 расхождения уходят в VLM, а вердикты решают, какие метки оставить, заменить или выкинуть.
 
 ```bash
-# 1. предсказания: kaggle/ru_predict_stroyinf.ipynb с RUN_PREDICTIONS = True пишет preds_partial.tsv,
+# 1. предсказания: kaggle/ru_export_eval_predict.ipynb с RUN_PREDICTIONS = True пишет preds_partial.tsv,
 #    затем (ноутбук делает это сам):
 python ru_ocr/tools/build_review.py --preds preds_partial.tsv \
     --labels data/ru_labels/stroyinf_modern_train_w_h.txt data/ru_labels/stroyinf_modern_val_w_h.txt --out preds_modern

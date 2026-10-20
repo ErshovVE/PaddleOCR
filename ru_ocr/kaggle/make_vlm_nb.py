@@ -19,7 +19,7 @@ md(r"""# RU OCR: third opinion on the stroyinf disagreements with PaddleOCR-VL
 stroyinf lines where our model (`pred`) and the text-layer label (`label`) differ; both are checked in one run. Here a VLM, **PaddleOCR-VL** (0.9B, `OCR:` prompt), reads every crop on its own, and
 each line gets a verdict: whom the VLM agrees with.
 
-**Input**: the crops (`ru-ocr-stroyinf` / `ru-ocr-stroyinf-modern`) and the output of `ru_predict_stroyinf`
+**Input**: the crops (`ru-ocr-stroyinf` / `ru-ocr-stroyinf-modern`) and the output of `ru_export_eval_predict`
 (`review.tsv`, `review_spaces.tsv`; Add Input -> Notebook Output). To resume: also `OUT_DATASET`.
 **Settings**: Accelerator **GPU T4 x2**, Internet on, Add-ons -> Secrets: `KAGGLE_API_TOKEN`. Save & Run All.
 

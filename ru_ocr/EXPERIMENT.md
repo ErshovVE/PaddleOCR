@@ -114,7 +114,7 @@ Cleaning uses two independent readers of every real crop: our model (ft3) and a 
 the two agree against it.
 
 1. **Predictions.** ft3 reads all 1 692 333 real lines (v2 on CPU with OpenVINO, modern on 2× T4 with Paddle;
-   `kaggle/ru_predict_stroyinf.ipynb`). `tools/build_review.py` splits out the disagreements:
+   `kaggle/ru_export_eval_predict.ipynb`). `tools/build_review.py` splits out the disagreements:
 
    | | Lines | Model = label | Differ in characters | Differ only in spaces |
    |---|---|---|---|---|
@@ -205,9 +205,9 @@ Line accuracy by label length on `all_val5k_clean`:
 | Label files with width / height, train/val split, merge | `tools/add_wh.py`, `tools/merge_labels.py` |
 | Archives for Kaggle | `tools/pack_dataset.py --format tar` (or `--from-zip`) |
 | Training | `kaggle/ru_train_2xT4.ipynb` + `configs/ru_PP-OCRv6_small_rec.yml` |
-| Predictions on the real lines, review tables | `kaggle/ru_predict_stroyinf.ipynb` (`RUN_PREDICTIONS = True`), `tools/build_review.py` |
+| Predictions on the real lines, review tables | `kaggle/ru_export_eval_predict.ipynb` (`RUN_PREDICTIONS = True`), `tools/build_review.py` |
 | VLM check | `kaggle/ru_vlm_check_stroyinf.ipynb` (built by `kaggle/make_vlm_nb.py`), `tools/vlm_review.py` |
 | Cleaned label files | `tools/clean_labels_vlm.py` |
-| Export, ONNX, test of checkpoints | `kaggle/ru_predict_stroyinf.ipynb` (sections 1–3b) |
+| Export, ONNX, test of checkpoints | `kaggle/ru_export_eval_predict.ipynb` (sections 1–3b) |
 
 Details of each step and the commands are in [README.md](README.md).
