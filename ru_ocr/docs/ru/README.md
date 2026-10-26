@@ -88,6 +88,7 @@
 | `scripts/run_train.py` | обучение без ноутбуков: родной `tools/train.py` под `paddle.distributed.launch` с настройками прогона, автопродолжение |
 | `kaggle/ru_train_2xT4.ipynb` | обучение на Kaggle 2× T4 в 12-часовых сессиях с выгрузкой чекпоинтов и продолжением |
 | `kaggle/ru_export_eval_predict.ipynb` | экспорт, ONNX, сверка бэкендов, тест чекпоинтов, предсказания на реальных строках |
+| `kaggle/ru_benchmark.ipynb` | скорость Paddle GPU / CPU, ONNX Runtime и OpenVINO на валидационных строках, с шапкой о железе |
 | `kaggle/ru_vlm_check_stroyinf.ipynb` | чтение спорных строк VLM (PaddleOCR-VL через vLLM); собирается `kaggle/make_vlm_nb.py` |
 | `tests/` | тесты инструментов и конфигов, сквозное smoke-обучение (`resource_intensive`) |
 
