@@ -5,7 +5,8 @@
 ## 1. Speed benchmark: Paddle, ONNX, OpenVINO on GPU and CPU
 
 Done: `scripts/benchmark.py` (any machine) and `kaggle/ru_benchmark.ipynb` (export + the script on Kaggle, input
-`ru-ocr-val5k-tar`); smoke runs on CPU passed. Left: the full val set on 2× T4, the result in README / EXPERIMENT.
+`ru-ocr-val5k-tar`); the full val set on a 4-core Kaggle CPU, results in `benchmarks/kaggle-cpu-4cores/`, README and
+EXPERIMENT (section 9). Left: the same on a GPU session (`paddle gpu`).
 
 - **Hardware first.** The output starts with what the numbers were measured on:
   - GPU: model, number of cards, memory, driver and CUDA version;

@@ -272,11 +272,36 @@ Line accuracy by label length on `all_val5k_clean`:
 - Eval with batch 1 (no padding at all) gives the same accuracy as with batches (ft3 on an earlier version of
   the cleaned set: 0.904 vs 0.905): the model does not depend on padding.
 
+### Inference speed on CPU
+
+`scripts/benchmark.py` on the 4 241 lines of `all_val5k_clean`. Kaggle CPU session: AMD EPYC 7B12, 2 cores ×
+2 threads (4 available to the process), 31 GB RAM. PaddleX `create_model`, images decoded in memory, library default
+threads. Full table and hardware header: [`benchmarks/kaggle-cpu-4cores/`](benchmarks/kaggle-cpu-4cores/).
+
+| Backend | batch 1 | batch 4 | batch 4, sorted | batch 8 | batch 8, sorted |
+|---|---|---|---|---|---|
+| Paddle | 6.9 | 8.0 | 12.3 | 7.9 | 13.6 |
+| ONNX Runtime | 18.4 | 13.0 | 20.5 | 11.3 | 18.1 |
+| OpenVINO | 18.5 | 13.7 | 21.3 | 12.3 | **21.4** |
+
+Lines per second; "sorted": lines ordered by width/height before batching.
+
+- **The backends read the same.** With the same batching, Paddle, ONNX Runtime and OpenVINO give identical texts on
+  all 4 241 lines: the ONNX export loses nothing, the backend changes only the speed.
+- **ONNX Runtime and OpenVINO are ~2.7× faster than Paddle** at batch 1 (54 ms per line against 146 ms).
+- **On CPU a batch helps only with lines of similar width.** Every line of a batch is padded to the widest one:
+  - without sorting, batches 4 and 8 are slower than batch 1;
+  - sorted, OpenVINO gains 15 % (21.3–21.4 lines/s, ~47 ms per line), ONNX Runtime 11 % at batch 4 and nothing at
+    batch 8, Paddle doubles but stays the slowest.
+- **Accuracy depends on the batching, not on the backend:** 0.9611–0.9637 (±11 lines).
+  - Sorted batches give 99.7–99.9 % of the batch-1 texts.
+  - Unsorted ones change 2 % of the lines, both ways (`ППР` → `ПР`, but `Таблица2` → `Таблица 2`).
+
 ## 10. Known limitations
 
-- **Spaces at line ends in batch inference.** Through PaddleX with batches padded to the widest line, ~5–7 % of
-  predictions get a leading or trailing space (none of the labels has one). The CTC metric counts it as an
-  error; strip predictions at inference.
+- **A trailing space in batch inference.** In batches padded to the widest line a prediction can end with a space
+  (none of the labels does): ft3 had it on ~5 % of the lines, ft4 on 8 of 4 241 with unsorted batches of 8 and on 1
+  with batch 1 or sorted batches. Strip predictions at inference.
 - **Single characters**: case of lone letters (`Т`/`т`, `К`/`к`) and digit/letter twins (`3`/`з`, `6`/`б`) are
   ambiguous without context.
 - **Punctuation**: em dash `—` vs hyphen `-`, decimal comma vs point, a period added after headings.

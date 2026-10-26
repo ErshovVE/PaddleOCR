@@ -310,7 +310,8 @@ for res in model.predict(["line.png"], batch_size=1):
 
 - Convert to ONNX from a model exported with **CPU** Paddle: an export made with `paddlepaddle-gpu` contains ops
   `paddle2onnx` does not support.
-- Strip the predictions: in batches padded to the widest line a few percent of them get a space at an end.
+- Strip the predictions: in batches padded to the widest line a few of them end with a space (8 of 4 241 lines with
+  unsorted batches of 8).
 
 Speed on the current machine (hardware header, every backend with batches 1 / 4 / 8, with and without sorting the
 lines by width; `benchmark.md`, `benchmark.tsv`, `hardware.json` in `--out`):
@@ -322,6 +323,10 @@ python ru_ocr/scripts/benchmark.py --labels data/ru_labels/all_val5k_clean_w_h.t
 ```
 
 On CPU a batch pays for padding every line to the widest one: sort the lines by width/height before batching.
+On 4 CPU cores (Kaggle) the model reads 18.5 lines/s with OpenVINO or ONNX Runtime at batch 1 and 21.4 lines/s with
+sorted batches of 8; Paddle gives 6.9. All backends read the same texts. Full table:
+[`benchmarks/kaggle-cpu-4cores/`](benchmarks/kaggle-cpu-4cores/benchmark.md),
+[EXPERIMENT.md, section 9](EXPERIMENT.md#inference-speed-on-cpu).
 
 ## Porting the old PyTorch model
 

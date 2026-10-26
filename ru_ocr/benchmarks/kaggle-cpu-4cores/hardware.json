@@ -1,0 +1,24 @@
+{
+ "gpu": [],
+ "gpu_driver": "",
+ "cuda_driver": "",
+ "cpu_model": "AMD EPYC 7B12",
+ "cpu_sockets": "1",
+ "cpu_cores_per_socket": "2",
+ "cpu_threads_per_core": "2",
+ "cpu_logical_host": 4,
+ "cpu_affinity": 4,
+ "cpu_quota": 4.0,
+ "cpu_available": 4,
+ "ram_total_gb": 31.3,
+ "ram_available_gb": 30.1,
+ "python": "3.13.15",
+ "versions": {
+  "paddlepaddle": "3.3.1",
+  "paddlex": "3.7.2",
+  "onnxruntime-openvino": "1.24.1",
+  "opencv-python": "4.14.0.94"
+ },
+ "paddle2onnx (venv)": "2.0.2rc3",
+ "labels": "all_val5k_clean_w_h.txt, 4241 lines"
+}
