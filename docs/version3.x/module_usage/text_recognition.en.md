@@ -941,7 +941,7 @@ python3 -m paddle.distributed.launch --gpus '0,1,2,3'  tools/train.py -c configs
 
 #### 4.2.1 Training on Long Text Lines (Optional)
 
-By default the `PPLCNetV3`/`PPLCNetV4`/`PPHGNetV2` recognition backbones pool the features to a fixed 40 CTC
+By default the `PPLCNetV3`/`PPLCNetV4`/`PPHGNetV2`/`PPHGNet_small` recognition backbones pool the features to a fixed 40 CTC
 steps at training time, while inference uses `W / 8` steps. Labels that need more than 40 steps (lines of
 roughly 35+ characters) get a zero CTC loss and are silently ignored. If your data contains long lines
 (whole document lines rather than words), the following optional keys help. All of them are off by

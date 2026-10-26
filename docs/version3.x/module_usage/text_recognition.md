@@ -964,7 +964,7 @@ python3 -m paddle.distributed.launch --gpus '0,1,2,3'  tools/train.py -c configs
 
 #### 4.2.1 长文本行训练（可选）
 
-默认情况下，`PPLCNetV3`/`PPLCNetV4`/`PPHGNetV2` 识别骨干网络在训练时将特征池化为固定的 40 个 CTC 步长，而推理时为
+默认情况下，`PPLCNetV3`/`PPLCNetV4`/`PPHGNetV2`/`PPHGNet_small` 识别骨干网络在训练时将特征池化为固定的 40 个 CTC 步长，而推理时为
 `W / 8` 个步长。需要超过 40 个步长的标签（约 35 个字符以上的文本行）的 CTC 损失为零，会被静默忽略。如果数据中包含长文本行
 （整行文档文本而不是单词），可以使用以下可选配置。所有配置默认关闭，不设置时训练行为与之前完全一致。
 
