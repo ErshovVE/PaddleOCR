@@ -11,7 +11,7 @@ Configs, dictionaries, tools and Kaggle notebooks for training a text line recog
 this branch (all of them config keys, off by default) and is not meant for an upstream PR.
 
 The experiment itself — task, data, label cleaning with a VLM, training runs and results — is described in
-[EXPERIMENT.md](EXPERIMENT.md).
+[EXPERIMENT.md](EXPERIMENT.md). Planned work: [TODO.md](TODO.md).
 
 | Model | Validation, cleaned labels | Validation, raw labels |
 |---|---|---|
