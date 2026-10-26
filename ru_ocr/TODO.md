@@ -34,3 +34,26 @@ Done: `scripts/benchmark.py` (any machine) and `kaggle/ru_benchmark.ipynb` (expo
   ensemble with a python backend, or on the client — choose one and document it.
 - A client example and a `docker run` command.
 - Throughput with `perf_analyzer`, next to the numbers from item 1.
+
+## 3. Pull requests to PaddlePaddle/PaddleOCR
+
+The core changes of this branch (everything outside `ru_ocr/`), as separate PRs. Checked by cherry-picking each
+group onto `main` (upstream `dab3fe3`): the independent ones apply cleanly, the rest apply in the order below.
+
+| # | PR | Commits | Depends on |
+|---|---|---|---|
+| 1 | **CTC length in training** (`Backbone.train_seq_len`): rec backbones pool to 40 time steps in training, and Paddle silently zeroes the CTC loss of longer labels; width-proportional pooling fixes long lines | `8ad7cba` | — |
+| 2 | `RecMetric.length_buckets`: accuracy and edit distance by label length | `216f302` | — |
+| 3 | perf: vectorised `WarpMLS` (TIA distort / stretch / perspective), the bottleneck of data loading | `3ad4051`, `04ff9ca` | — |
+| 4 | `MultiScaleSampler`: mixed sorted / shuffled batches (`sorted_batch_ratio`), `pad_to_longest`, sampler for Eval; fix: `ratio_list` sampling in `MultiScaleDataSet`; fix: `RecResizeImg` in `inference.yml` when Eval uses a sampler | `c31cc69`, `cf29bd4`, `12a40b6` | — |
+| 5 | Augmentations: `RecConAug` with spaces and batch-width fit, capped TIA vertical shift, extra samples read only when they fit; document-scan augmentations in `RecAug` (rotate, downscale, JPEG, stroke); table rules next to the text | `303eefb`, `6bfc567`, `252e063`, `999f90f` | 4 |
+| 6 | Training: `Global.save_batch_step` and resume inside an epoch; `Global.save_on_signal` saves `latest` when stopped | `71ebae1`, `74b40fe` (without their `ru_ocr/` files) | 4 |
+| 7 | Docs: training on long text lines (`text_recognition.md` / `.en.md`) | `dd1d7db` | 1, 4, 5 (rewrite for what is merged) |
+
+- `fea334d` (`se_gate` for RepSVTR) is only for porting our old PyTorch weights: not proposed.
+- `71ebae1` and `74b40fe` also change `ru_ocr/` (smoke test, notebook): split those parts off.
+- Before opening:
+  - rebase onto the current upstream `main` (this clone is from 2026-10-01);
+  - run their pre-commit and tests;
+  - sign the CLA;
+  - write the PR texts in English with the numbers from EXPERIMENT (long lines, data loading speed).
