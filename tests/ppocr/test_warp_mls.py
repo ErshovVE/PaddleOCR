@@ -121,10 +121,20 @@ class LoopWarpMLS:
                 di = np.reshape(np.arange(h), (-1, 1))
                 dj = np.reshape(np.arange(w), (1, -1))
                 delta_x = self._bilinear_interp(
-                    di / h, dj / w, self.rdx[i, j], self.rdx[i, nj], self.rdx[ni, j], self.rdx[ni, nj]
+                    di / h,
+                    dj / w,
+                    self.rdx[i, j],
+                    self.rdx[i, nj],
+                    self.rdx[ni, j],
+                    self.rdx[ni, nj],
                 )
                 delta_y = self._bilinear_interp(
-                    di / h, dj / w, self.rdy[i, j], self.rdy[i, nj], self.rdy[ni, j], self.rdy[ni, nj]
+                    di / h,
+                    dj / w,
+                    self.rdy[i, j],
+                    self.rdy[i, nj],
+                    self.rdy[ni, j],
+                    self.rdy[ni, nj],
                 )
                 nx = np.clip(j + dj + delta_x * self.trans_ratio, 0, src_w - 1)
                 ny = np.clip(i + di + delta_y * self.trans_ratio, 0, src_h - 1)
@@ -139,7 +149,12 @@ class LoopWarpMLS:
                     x = ny - nyi
                     y = nx - nxi
                 dst[i : i + h, j : j + w] = self._bilinear_interp(
-                    x, y, self.src[nyi, nxi], self.src[nyi, nxi1], self.src[nyi1, nxi], self.src[nyi1, nxi1]
+                    x,
+                    y,
+                    self.src[nyi, nxi],
+                    self.src[nyi, nxi1],
+                    self.src[nyi1, nxi],
+                    self.src[nyi1, nxi1],
                 )
         dst = np.clip(dst, 0, 255)
         return np.array(dst, dtype=np.uint8)
@@ -167,18 +182,24 @@ def _image(h, w, channels, seed):
 def _assert_same_image(new, old):
     """Sampling is cv2.remap now: it rounds to the nearest level where the loop version
     truncated (which darkened images by half a level on average) and quantises the sub-pixel
-    position to 1/32 px -- about half of the values move by one level, none by more than two."""
+    position to 1/32 px -- about half of the values move by one level, none by more than two.
+    """
     assert new.shape == old.shape and new.dtype == old.dtype
     diff = np.abs(new.astype(np.int16) - old.astype(np.int16))
     assert diff.max() <= 2
     assert diff.mean() < 0.75
 
 
-@pytest.mark.parametrize("h,w", [(16, 30), (48, 100), (48, 101), (32, 250), (64, 1600), (150, 333), (44, 4000)])
+@pytest.mark.parametrize(
+    "h,w",
+    [(16, 30), (48, 100), (48, 101), (32, 250), (64, 1600), (150, 333), (44, 4000)],
+)
 def test_displacement_field_matches_loop_version(h, w):
     rng = np.random.RandomState(h * 7 + w)
     # corner points coincide with grid nodes -- the special case of the original loop
-    dst = [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]] + rng.randint(0, max(w, h), size=(6, 2)).tolist()
+    dst = [[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]] + rng.randint(
+        0, max(w, h), size=(6, 2)
+    ).tolist()
     src = (np.array(dst) + rng.randint(-5, 6, size=(len(dst), 2))).tolist()
     img = _image(h, w, 3, 0)
     old, new = LoopWarpMLS(img, src, dst, w, h), WarpMLS(img, src, dst, w, h)
@@ -194,8 +215,13 @@ def test_displacement_field_matches_loop_version(h, w):
         np.testing.assert_allclose(new.rdy, old.rdy, atol=FIELD_ATOL_PX)
 
 
-@pytest.mark.parametrize("func", [augment.tia_distort, augment.tia_stretch, augment.tia_perspective])
-@pytest.mark.parametrize("h,w,channels", [(32, 120, 3), (48, 960, 3), (48, 97, 1), (64, 1600, 3), (20, 40, 3)])
+@pytest.mark.parametrize(
+    "func", [augment.tia_distort, augment.tia_stretch, augment.tia_perspective]
+)
+@pytest.mark.parametrize(
+    "h,w,channels",
+    [(32, 120, 3), (48, 960, 3), (48, 97, 1), (64, 1600, 3), (20, 40, 3)],
+)
 def test_tia_output_matches_loop_version(monkeypatch, func, h, w, channels):
     img = _image(h, w, channels, h + w)
     args = (img, 4) if func is not augment.tia_perspective else (img,)

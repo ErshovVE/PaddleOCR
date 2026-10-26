@@ -104,8 +104,12 @@ class WarpMLS:
             c = (pt_i * cur_j[:, None, :]).sum(axis=2)
             e = (pt_j * cur_j[:, None, :]).sum(axis=2)
             scale = w / miu
-            new_x = (scale * (a * q[None, :, 0] - b * q[None, :, 1])).sum(axis=1) + qstar[:, 0]
-            new_y = (scale * (-c * q[None, :, 0] + e * q[None, :, 1])).sum(axis=1) + qstar[:, 1]
+            new_x = (scale * (a * q[None, :, 0] - b * q[None, :, 1])).sum(
+                axis=1
+            ) + qstar[:, 0]
+            new_y = (scale * (-c * q[None, :, 0] + e * q[None, :, 1])).sum(
+                axis=1
+            ) + qstar[:, 1]
 
         if snap.any():
             new_x[snap] = q[first[snap], 0]
@@ -121,11 +125,19 @@ class WarpMLS:
         y0, y1, fy = _cells(self.dst_h, self.grid_size)
         x0, x1, fx = _cells(self.dst_w, self.grid_size)
         fy = fy[:, None]
-        nx = np.arange(self.dst_w)[None, :] + self._interp(self.rdx, y0, y1, fy, x0, x1, fx) * self.trans_ratio
-        ny = np.arange(self.dst_h)[:, None] + self._interp(self.rdy, y0, y1, fy, x0, x1, fx) * self.trans_ratio
+        nx = (
+            np.arange(self.dst_w)[None, :]
+            + self._interp(self.rdx, y0, y1, fy, x0, x1, fx) * self.trans_ratio
+        )
+        ny = (
+            np.arange(self.dst_h)[:, None]
+            + self._interp(self.rdy, y0, y1, fy, x0, x1, fx) * self.trans_ratio
+        )
         map_x = np.clip(nx, 0, src_w - 1).astype(np.float32)
         map_y = np.clip(ny, 0, src_h - 1).astype(np.float32)
-        dst = cv2.remap(self.src, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        dst = cv2.remap(
+            self.src, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+        )
         return np.array(dst, dtype=np.uint8)
 
     @classmethod
