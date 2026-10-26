@@ -16,6 +16,7 @@ import numpy as np
 import paddle
 import pytest
 
+from ppocr.modeling.backbones.rec_hgnet import PPHGNet_small
 from ppocr.modeling.backbones.rec_lcnetv3 import PPLCNetV3
 from ppocr.modeling.backbones.rec_lcnetv4 import PPLCNetV4
 from ppocr.modeling.backbones.rec_pphgnetv2 import PPHGNetV2_B4
@@ -66,6 +67,11 @@ BACKBONES = [
     pytest.param(
         lambda **kw: PPHGNetV2_B4(text_rec=True, **kw),
         id="hgnetv2_b4",
+        marks=pytest.mark.resource_intensive,
+    ),
+    pytest.param(
+        lambda **kw: PPHGNet_small(**kw),
+        id="hgnet_small",
         marks=pytest.mark.resource_intensive,
     ),
 ]
