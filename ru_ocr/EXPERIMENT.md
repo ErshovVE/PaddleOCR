@@ -299,9 +299,13 @@ Lines per second; "sorted": lines ordered by width/height before batching.
 
 ## 10. Known limitations
 
+This is a research project, not a production model. ft4 is two short fine-tuning stages; it was not polished by a
+long training tail at a small learning rate. In our experience such a tail removes the rare systematic slips like a
+trailing space or `б`/`6`, `з`/`3` confusions.
+
 - **A trailing space in batch inference.** In batches padded to the widest line a prediction can end with a space
-  (none of the labels does): ft3 had it on ~5 % of the lines, ft4 on 8 of 4 241 with unsorted batches of 8 and on 1
-  with batch 1 or sorted batches. Strip predictions at inference.
+  (none of the labels does). ft3 had it on ~5 % of the lines. In ft4 it has almost gone: 8 of 4 241 lines with
+  unsorted batches of 8, 1 with batch 1 or sorted batches. It can still appear, so strip predictions at inference.
 - **Single characters**: case of lone letters (`Т`/`т`, `К`/`к`) and digit/letter twins (`3`/`з`, `6`/`б`) are
   ambiguous without context.
 - **Punctuation**: em dash `—` vs hyphen `-`, decimal comma vs point, a period added after headings.
