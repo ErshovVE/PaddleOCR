@@ -53,8 +53,9 @@
 - **PR 1 готов:** ветка `feat/rec-train-seq-len` в форке, от `main` upstream; тесты и black/flake8 проходят;
   заголовок, текст и проверки — в [`upstream_prs/01-rec-train-seq-len.md`](../../upstream_prs/01-rec-train-seq-len.md).
   Открыт как PaddlePaddle/PaddleOCR#18420.
-- **PR 2 и PR 3 готовы:** ветки `feat/rec-metric-length-buckets` и `perf/warp-mls-vectorise` (+ коммит black
-  `d2fa563`); тексты и проверки — в [`upstream_prs/`](../../upstream_prs/).
+- **PR 2 и PR 3** (ветки `feat/rec-metric-length-buckets`, `perf/warp-mls-vectorise` + коммит black `d2fa563`;
+  тексты и проверки — в [`upstream_prs/`](../../upstream_prs/)) открыты как PaddlePaddle/PaddleOCR#18421 и #18422.
+  CLA подписан. Все три ждут, пока мейнтейнер одобрит запуск CI, и ревью.
 - `fea334d` (`se_gate` для RepSVTR) нужен только для переноса наших старых весов PyTorch: не предлагаем.
 - `71ebae1` и `74b40fe` меняют ещё и `ru_ocr/` (smoke-тест, ноутбук): эти части отделить.
 - Перед открытием:
