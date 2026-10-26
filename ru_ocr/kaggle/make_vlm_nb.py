@@ -24,7 +24,7 @@ each line gets a verdict: whom the VLM agrees with.
 **Settings**: Accelerator **GPU T4 x2**, Internet on, Add-ons -> Secrets: `KAGGLE_API_TOKEN`. Save & Run All.
 
 - One worker process per GPU (`vlm_worker.py`, vLLM; `ENGINE = "transformers"` as a fallback), each takes every
-  second line. Lines go in a fixed random order (`SEED`), so the first `PILOT` lines are a random sample.
+  second line of the review tables.
 - Each worker appends to `vlm_part{k}.tsv` every `SAVE_EVERY` lines; all parts are uploaded to `OUT_DATASET`
   every 10 min (a growing dataset = the run is alive). Parts found under `/kaggle/input` are skipped.
 - The worker logs are printed here every minute.
@@ -38,13 +38,11 @@ code(r"""KAGGLE_USER = "vladislavershov"  # owner of the private Kaggle datasets
 REPO = "https://github.com/ErshovVE/PaddleOCR.git"  # cloned for the configs and ru_ocr/tools
 BRANCH = "feat/ru-ppocrv6-small-training"
 REVIEWS = ["review.tsv", "review_spaces.tsv"]  # tables under /kaggle/input, checked together
-PILOT = None             # lines checked (a random sample); None = all lines of REVIEWS
 ENGINE = "vllm"          # "vllm" or "transformers" (slower fallback, batch 1)
 MODEL_ID = "PaddlePaddle/PaddleOCR-VL-1.6"
 GPUS = 2
 SAVE_EVERY = 500         # lines per worker between appends to vlm_part{k}.tsv
 MAX_TOKENS = 256         # generation limit per line
-SEED = 0
 OUT_DATASET = f"{KAGGLE_USER}/ru-ocr-stroyinf-modern-vlm"  # parts uploaded here every 10 min; None: no upload
 # OUT_DATASET = None  # smoke test (e.g. on ru-ocr-smoke): no upload, no secret needed
 WORK = "/kaggle/working"
@@ -117,7 +115,7 @@ sys.path.insert(0, f"{WORK}/PaddleOCR/ru_ocr/tools")""")
 
 md("## 1. Data\nThe review paths start with `stroyinf/<folder>/crops/...`: the folders with `crops/` are linked into `/tmp/ru_root/stroyinf`.")
 
-code(r"""import csv, random
+code(r"""import csv
 
 ROOT = "/tmp/ru_root"
 os.makedirs(os.path.join(ROOT, "stroyinf"), exist_ok=True)
@@ -153,9 +151,6 @@ print("stroyinf folders:", len(os.listdir(os.path.join(ROOT, "stroyinf"))), "rev
 print("earlier parts:", parts)
 
 order = list(range(len(review)))
-random.Random(SEED).shuffle(order)
-if PILOT:
-    order = order[:PILOT]
 vlm = {}
 for path in parts:
     with open(path, encoding="utf-8") as f:
@@ -325,17 +320,16 @@ for k in range(GPUS):  # every line has a reading (the workers finished)
 missing = [i for i in order if i not in vlm]
 assert not missing, f"{len(missing)} lines without a VLM text"
 # review_vlm.tsv = the review tables + review, vlm, vlm_score, verdict: ru_ocr/tools/vlm_review.py, the same rule
-# (clean_labels_vlm.vlm_verdict) as the label cleaning; PILOT lines only get a verdict when PILOT is None
-if PILOT is None:
-    parts = [f"{WORK}/{name}" for name in os.listdir(WORK) if name.startswith("vlm_") and name.endswith(".tsv")
-             and (name.startswith("vlm_part") or name == "vlm_earlier.tsv")]
-    sh(f"{shlex.quote(sys.executable)} {WORK}/PaddleOCR/ru_ocr/tools/vlm_review.py --reviews "
-       + " ".join(review_paths[name][0] for name in REVIEWS) + " --parts " + " ".join(parts)
-       + f" --out {WORK}/review_vlm.tsv")
-    df = pd.read_csv(f"{WORK}/review_vlm.tsv", sep="\t", quoting=3, keep_default_na=False)
-    print(pd.crosstab(df.verdict, df.review, margins=True).to_string())
-    pd.set_option("display.max_colwidth", 60)
-    df.sample(min(30, len(df)), random_state=0)[["label", "pred", "vlm", "verdict"]]""")
+# (clean_labels_vlm.vlm_verdict) as the label cleaning
+parts = [f"{WORK}/{name}" for name in os.listdir(WORK) if name.startswith("vlm_") and name.endswith(".tsv")
+         and (name.startswith("vlm_part") or name == "vlm_earlier.tsv")]
+sh(f"{shlex.quote(sys.executable)} {WORK}/PaddleOCR/ru_ocr/tools/vlm_review.py --reviews "
+   + " ".join(review_paths[name][0] for name in REVIEWS) + " --parts " + " ".join(parts)
+   + f" --out {WORK}/review_vlm.tsv")
+df = pd.read_csv(f"{WORK}/review_vlm.tsv", sep="\t", quoting=3, keep_default_na=False)
+print(pd.crosstab(df.verdict, df.review, margins=True).to_string())
+pd.set_option("display.max_colwidth", 60)
+df.sample(min(30, len(df)), random_state=0)[["label", "pred", "vlm", "verdict"]]""")
 
 nb = {
     "cells": [],
