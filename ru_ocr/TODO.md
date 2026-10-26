@@ -63,3 +63,32 @@ group onto `main` (upstream `dab3fe3`): the independent ones apply cleanly, the 
   - run their pre-commit and tests;
   - sign the CLA;
   - write the PR texts in English with the numbers from EXPERIMENT (long lines, data loading speed).
+
+## 4. A separate repository for ru_ocr
+
+The fork holds the whole PaddleOCR library, and the training work drowns in it. Move `ru_ocr/` (configs,
+dictionaries, scripts, tools, notebooks, tests, docs) to its own repository without the library, and remove
+`feat/ru-ppocrv6-small-training` from the public fork.
+
+- **PaddleOCR from a pinned release plus a patch.**
+  - The repository keeps `patches/paddleocr-v3.7.0.patch`: our core changes, `git diff` of everything outside
+    `ru_ocr/`.
+  - `scripts/setup_env.sh` clones the `v3.7.0` tag and runs `git apply`.
+  - A patch, not copies of whole files. If a new release changes the same places, `git apply` fails loudly instead
+    of silently overwriting upstream fixes.
+  - When a PR of item 3 is merged and released, its part leaves the patch.
+- **Checked on 2026-10-26:**
+  - the 16 core files we change are identical in `v3.7.0` and in `main` (`dab3fe3`, the base of the branch); only
+    the two `text_recognition` docs differ;
+  - the whole core diff (25 files with tests and docs, ~4 000 lines) applies to `v3.7.0` cleanly.
+- **What depends on the PaddleOCR tree and has to change:**
+  - `scripts/run_train.py` and `benchmark.py` and the notebooks call `tools/train.py`, `tools/eval.py`,
+    `tools/export_model.py`;
+  - `tools/convert_torchocr_rec.py` and `validate_models.py` import `ppocr`;
+  - `tests/conftest.py` puts the repository root on `sys.path`;
+  - the notebooks clone `REPO` / `BRANCH` and use `ru_ocr/...` paths.
+
+  Probably: the new repository next to a patched PaddleOCR checkout, its path in one variable.
+- **History:** keep it with `git filter-repo --subdirectory-filter ru_ocr`, or start clean. To decide.
+- **Before removing the branch from the fork:** none of #18420–#18422 links to it (checked); the `upstream_prs/`
+  texts do (the EXPERIMENT link of PR 1): update them.
