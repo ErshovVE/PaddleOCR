@@ -55,7 +55,7 @@ All changes are config keys, **off by default**; upstream configs behave as befo
 
 | Key | Effect |
 |---|---|
-| `Backbone.train_seq_len: -1` | PPLCNetV3/V4, PPHGNetV2: during training T = width / 8, as at inference (default 40) |
+| `Backbone.train_seq_len: -1` | PPLCNetV3/V4, PPHGNetV2, PPHGNet_small: during training T = width / 8, as at inference (default 40) |
 | `MultiScaleSampler.sorted_batch_ratio`, `pad_to_longest` | a share of batches sorted by aspect ratio (little padding) mixed with shuffled ones; batch width follows its widest image |
 | `Eval.sampler` | validation like inference: every line resized by its own aspect ratio, no width cap at 320 |
 | `RecMetric.length_buckets: [15, 40, 60]` | accuracy and normalized edit distance by label length, in training logs and eval |
