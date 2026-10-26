@@ -86,9 +86,10 @@
 | `tools/convert_torchocr_rec.py` | перенос весов torchocr в `.pdparams`, сверка с ONNX, перенумерация выходных слоёв под новый словарь |
 | `scripts/setup_env.sh` | среда обучения на Linux-машине с GPU: paddlepaddle-gpu, зависимости, предобученные веса |
 | `scripts/run_train.py` | обучение без ноутбуков: родной `tools/train.py` под `paddle.distributed.launch` с настройками прогона, автопродолжение |
+| `scripts/benchmark.py` | скорость экспортированной модели: Paddle GPU / CPU, ONNX Runtime, OpenVINO; шапка о железе, батчи с сортировкой по ширине и без |
 | `kaggle/ru_train_2xT4.ipynb` | обучение на Kaggle 2× T4 в 12-часовых сессиях с выгрузкой чекпоинтов и продолжением |
 | `kaggle/ru_export_eval_predict.ipynb` | экспорт, ONNX, сверка бэкендов, тест чекпоинтов, предсказания на реальных строках |
-| `kaggle/ru_benchmark.ipynb` | скорость Paddle GPU / CPU, ONNX Runtime и OpenVINO на валидационных строках, с шапкой о железе |
+| `kaggle/ru_benchmark.ipynb` | экспорт из чекпоинта и `scripts/benchmark.py` на Kaggle (вход `ru-ocr-val5k-tar`) |
 | `kaggle/ru_vlm_check_stroyinf.ipynb` | чтение спорных строк VLM (PaddleOCR-VL через vLLM); собирается `kaggle/make_vlm_nb.py` |
 | `tests/` | тесты инструментов и конфигов, сквозное smoke-обучение (`resource_intensive`) |
 
@@ -315,6 +316,18 @@ for res in model.predict(["line.png"], batch_size=1):
   которых `paddle2onnx` не знает.
 - Обрезайте предсказания: в батчах, дополненных до самой широкой строки, несколько процентов из них получают пробел
   на краю.
+
+Скорость на текущей машине (шапка о железе, каждый бэкенд с батчами 1 / 4 / 8, с сортировкой строк по ширине и без;
+`benchmark.md`, `benchmark.tsv`, `hardware.json` в `--out`):
+
+```bash
+python ru_ocr/scripts/benchmark.py --labels data/ru_labels/all_val5k_clean_w_h.txt --root data/ru_root \
+    --paddle-model ./output/ru_PP-OCRv6_small_rec/inference --onnx-model ./output/ru_PP-OCRv6_small_rec/onnx \
+    --out output/benchmark
+```
+
+На CPU батч платит за дополнение каждой строки до самой широкой: перед нарезкой на батчи сортируйте строки по
+отношению ширины к высоте.
 
 ## Перенос старой PyTorch-модели
 

@@ -4,8 +4,8 @@
 
 ## 1. Замер скорости: Paddle, ONNX, OpenVINO на GPU и CPU
 
-Черновик: `kaggle/ru_benchmark.ipynb` (Kaggle 2× T4; ещё не запускался — сначала smoke на `ru-ocr-smoke`, потом
-полная валидация). Осталось: сам прогон, локальная версия того же кода, итог в README / EXPERIMENT.
+Сделано: `scripts/benchmark.py` (на любой машине) и `kaggle/ru_benchmark.ipynb` (экспорт + этот скрипт на Kaggle,
+вход `ru-ocr-val5k-tar`); smoke на CPU прошёл. Осталось: полная валидация на 2× T4, итог в README / EXPERIMENT.
 
 - **Сначала железо.** Вывод начинается с того, на чём мерили:
   - GPU: модель, число карт, память, версии драйвера и CUDA;
