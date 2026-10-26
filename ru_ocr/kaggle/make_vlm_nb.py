@@ -19,8 +19,9 @@ md(r"""# RU OCR: third opinion on the stroyinf disagreements with PaddleOCR-VL
 stroyinf lines where our model (`pred`) and the text-layer label (`label`) differ; both are checked in one run. Here a VLM, **PaddleOCR-VL** (0.9B, `OCR:` prompt), reads every crop on its own, and
 each line gets a verdict: whom the VLM agrees with.
 
-**Input**: the crops (`ru-ocr-stroyinf` / `ru-ocr-stroyinf-modern`) and the output of `ru_export_eval_predict`
-(`review.tsv`, `review_spaces.tsv`; Add Input -> Notebook Output). To resume: also `OUT_DATASET`.
+**Input**: the crop archives (`*.tarpack`, e.g. `ru-ocr-stroyinf-modern-tar`) and the review tables
+(`review.tsv`, `review_spaces.tsv`: the output of `ru_export_eval_predict` or a dataset with them). To resume: also
+`OUT_DATASET`.
 **Settings**: Accelerator **GPU T4 x2**, Internet on, Add-ons -> Secrets: `KAGGLE_API_TOKEN`. Save & Run All.
 
 - One worker process per GPU (`vlm_worker.py`, vLLM; `ENGINE = "transformers"` as a fallback), each takes every
@@ -82,7 +83,7 @@ def sh(cmd, timeout=1800, attempts=3):
 
 
 PIP = f"{shlex.quote(sys.executable)} -m pip install --progress-bar off --timeout 120 --retries 10"
-sh(f"{PIP} rapidfuzz --upgrade kaggle uv")
+sh(f"{PIP} --upgrade kaggle uv")
 # The Kaggle image (Python 3.13, torch 2.11.0+cu128, transformers 5.x) runs the transformers engine as it is.
 # vllm goes into its own venv, VLLM_PY, and only the vllm workers run there, so the image is never touched.
 # The image sets UV_SYSTEM_PYTHON=true (uv would install into the image): it is unset for every uv call.
@@ -113,7 +114,7 @@ assert check("import torch, torchcodec; print('image: torch', torch.__version__,
 sh(f"rm -rf {WORK}/PaddleOCR && git clone -q --depth 1 --branch {BRANCH} {REPO} {WORK}/PaddleOCR")
 sys.path.insert(0, f"{WORK}/PaddleOCR/ru_ocr/tools")""")
 
-md("## 1. Data\nThe review paths start with `stroyinf/<folder>/crops/...`: the folders with `crops/` are linked into `/tmp/ru_root/stroyinf`.")
+md("## 1. Data\nCrop archives `*.tarpack` are unpacked into `/tmp/ru_root` (folders of single crops with `crops/` are linked there); the review tables are read in `REVIEWS` order, a line index runs over all of them. Readings of earlier sessions (`vlm_part*.tsv` under `/kaggle/input`) are skipped.")
 
 code(r"""import csv
 
@@ -150,7 +151,6 @@ assert not missing, f"crops not found, e.g. {missing[:3]}"
 print("stroyinf folders:", len(os.listdir(os.path.join(ROOT, "stroyinf"))), "review lines:", len(review))
 print("earlier parts:", parts)
 
-order = list(range(len(review)))
 vlm = {}
 for path in parts:
     with open(path, encoding="utf-8") as f:
@@ -158,11 +158,11 @@ for path in parts:
             fields = line.rstrip("\n").split("\t")
             if len(fields) == 3:  # skips a line cut by an upload taken mid-append
                 vlm[int(fields[0])] = (fields[1], float(fields[2]))
-todo = [i for i in order if i not in vlm]
+todo = [i for i in range(len(review)) if i not in vlm]
 for name in os.listdir(WORK):  # parts of an earlier Run All in this session: the workers would skip their lines
     if name.startswith(("vlm_part", "vlm_worker")) and name.endswith((".tsv", ".log")):
         os.remove(os.path.join(WORK, name))
-print(len(order), "lines to check,", len(order) - len(todo), "done earlier,", len(todo), "to do")
+print(len(review), "lines to check,", len(review) - len(todo), "done earlier,", len(todo), "to do")
 with open(f"{WORK}/vlm_earlier.tsv", "w", encoding="utf-8") as f:  # keeps the earlier lines in this output
     f.writelines(f"{i}\t{t}\t{s}\n" for i, (t, s) in vlm.items())
 with open(f"{WORK}/vlm_todo.tsv", "w", encoding="utf-8") as f:
@@ -309,18 +309,8 @@ md("## 4. Verdicts")
 
 code(r"""import pandas as pd
 
-for k in range(GPUS):  # every line has a reading (the workers finished)
-    path = f"{WORK}/vlm_part{k}.tsv"
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                fields = line.rstrip("\n").split("\t")
-                if len(fields) == 3:
-                    vlm[int(fields[0])] = (fields[1], float(fields[2]))
-missing = [i for i in order if i not in vlm]
-assert not missing, f"{len(missing)} lines without a VLM text"
 # review_vlm.tsv = the review tables + review, vlm, vlm_score, verdict: ru_ocr/tools/vlm_review.py, the same rule
-# (clean_labels_vlm.vlm_verdict) as the label cleaning
+# (clean_labels_vlm.vlm_verdict) as the label cleaning; it fails if a line has no reading
 parts = [f"{WORK}/{name}" for name in os.listdir(WORK) if name.startswith("vlm_") and name.endswith(".tsv")
          and (name.startswith("vlm_part") or name == "vlm_earlier.tsv")]
 sh(f"{shlex.quote(sys.executable)} {WORK}/PaddleOCR/ru_ocr/tools/vlm_review.py --reviews "

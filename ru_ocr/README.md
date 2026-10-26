@@ -17,6 +17,53 @@ The experiment itself — task, data, label cleaning with a VLM, training runs a
 |---|---|---|
 | PP-OCRv6 small, ft4 | **0.960** line accuracy | 0.784 |
 
+## How the current model was trained
+
+### Steps
+
+1. **Core fix for long lines.** PP-LCNet backbones trained CTC on 40 time steps only, and Paddle's CTC loss silently
+   gives zero loss and gradient to longer labels. `Backbone.train_seq_len: -1` makes the train-time CTC length
+   width / 8, as at inference; batches go up to 2 400 px wide; validation runs like inference (each line at its own
+   width). Other core changes: concatenation with a space, TIA limited for long lines, scan augmentations, metrics by
+   line length ([EXPERIMENT.md, section 3](EXPERIMENT.md#3-changes-to-paddleocr-core)).
+2. **Data.** Synthetic document lines (`doc-generator`, clean and degraded pages) + real lines cut from PDF text
+   layers of Russian standards (`ocr_markup`: stroyinf v2, Soviet scans; stroyinf modern, ≥ 1992).
+3. **First run (v6 small)** from the official PP-OCRv6 small weights, new output layers for our dictionary.
+4. **ft3**: fine-tuning from its weights with the modern standards and degraded synthetic lines added.
+5. **Label cleaning**: ft3 reads every real line; lines where it disagrees with the text-layer label are read by
+   PaddleOCR-VL; labels confirmed by the VLM are kept, labels the VLM reads as the model did are replaced, the rest are
+   dropped ([EXPERIMENT.md, section 7](EXPERIMENT.md#7-label-cleaning)).
+6. **ft4**: fine-tuning from ft3 `best_accuracy` on the cleaned labels — the current model.
+7. **Export** to a Paddle inference model and ONNX, checked through Paddle / ONNX Runtime / OpenVINO.
+
+### Training stages
+
+All on Kaggle, 2× T4, fp16, 12 h sessions chained through checkpoints (`kaggle/ru_train_2xT4.ipynb`).
+
+| Stage | Start from | Training data (lines) | LR schedule | Trained | Validation |
+|---|---|---|---|---|---|
+| v6 small | official PP-OCRv6 small pretrained | synthetic 1 985 902 + stroyinf v2 580 800 | cosine 0.0005, 1 warmup epoch | 88 000 steps (~1.6 epochs) | stroyinf v2 val5k: 0.706 |
+| ft3 | weights of v6 small step 88 000 | + stroyinf modern 1 060 968 + degraded synthetic 497 805 = 4 125 475 | cosine 0.0005, no warmup, 3 epochs planned | 103 355 steps (~1.15 epochs), best at 100 000 | `all_val5k`: 0.774 |
+| **ft4** | weights of ft3 `best_accuracy` (step 100 000) | cleaned: 3 995 865 | cosine 0.0005, no warmup, 2 epochs | ~173 600 steps (2 epochs, ~18 h) | `all_val5k_clean`: **0.960**, `all_val5k`: 0.784 |
+
+Each stage starts from the previous weights only (`Global.pretrained_model`): the optimizer and the schedule start
+anew. `best_accuracy` is chosen on the validation every 10 000 steps.
+
+### Parameters (`configs/ru_PP-OCRv6_small_rec.yml` + the training notebook)
+
+| | |
+|---|---|
+| Model | PP-OCRv6 small: PPLCNetV4 backbone, `train_seq_len: -1`; CTC head with LightSVTR neck (dims 120, depth 2); NRTR head (dim 384, training only) |
+| Loss | CTC + NRTR (`MultiLoss`) |
+| Dictionary | `dict/ru_dict_ext011026.txt`, 164 characters + space; `max_text_length` 250 |
+| Optimizer | Adam (β 0.9 / 0.999), L2 3e-5, cosine LR |
+| Batch | 32 per card, 2 cards; fp16 AMP (`scale_loss` 1024, dynamic) |
+| Input | height 32 / 48 / 64 (multi-scale) in training, 48 in validation; width by the line's aspect ratio, batch up to 2 400 px |
+| Sampler | `MultiScaleSampler`: 80 % of batches sorted by aspect ratio, 20 % shuffled; batch width = its widest line |
+| Concatenation | `RecConAug` p 0.7: another line glued after a 16–80 px background gap with a space in the label, never wider than the batch or longer than its CTC steps (~6 % of samples end up concatenated) |
+| Augmentations | TIA with vertical shift ≤ 0.25 of the line height; crop 0.1, noise 0.1, color jitter 0.1, blur 0.1, HSV 0.1, reverse 0.01; scan: rotation 0.2 (up to 3° for words, 0.6° at w/h 30), low DPI 0.15, JPEG 0.15, stroke width 0.1, table rules at the edges 0.1 |
+| Validation | `all_val5k_clean`, every line at its own width, exact match, spaces count, accuracy by length 0–15 / 16–40 / 41–60 / 61+ |
+
 ## Contents
 
 | Path | What |

@@ -61,7 +61,7 @@ All changes are config keys, **off by default**; upstream configs behave as befo
 | `RecMetric.length_buckets: [15, 40, 60]` | accuracy and normalized edit distance by label length, in training logs and eval |
 | `RecConAug.add_space`, `fit_batch_width`, `ctc_stride`, `skip_unfit`, `ext_aug` | concatenation augmentation inserts a background gap and a space into the label, never makes a sample wider than its batch or longer than its CTC steps |
 | `RecAug.tia_max_vertical_ratio` | TIA distortion no longer moves points vertically by more than a share of the line height (it destroyed long lines) |
-| `RecAug.rotate_prob`, `downscale_prob`, `jpeg_prob`, `stroke_prob` | scan augmentations: rotation limited by line length, low DPI, JPEG artifacts, stroke width |
+| `RecAug.rotate_prob`, `downscale_prob`, `jpeg_prob`, `stroke_prob`, `edge_lines_prob` | scan augmentations: rotation limited by line length, low DPI, JPEG artifacts, stroke width, table rules at the edges (a detector box on a table cell) |
 | `Global.save_on_signal` | on SIGTERM / SIGINT finish the step and save `latest` with its position in the epoch (12 h Kaggle sessions) |
 | fixes | `MultiScaleDataSet.ratio_list` picked the narrowest lines instead of a random subset; export of a model validated through a sampler lacked `RecResizeImg`; TIA vectorised (6–11× faster); RecConAug candidates filtered before reading (data loading 42 → ~120 lines/s per core) |
 
