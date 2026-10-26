@@ -83,6 +83,8 @@
 | `tools/ckpt_uploader.py` | выгружает чекпоинты и файлы результатов в датасет Kaggle по ходу прогона |
 | `tools/validate_models.py` | проверка экспортированных моделей через `TextRecognition`: точность и редакционное расстояние по длине и группам |
 | `tools/convert_torchocr_rec.py` | перенос весов torchocr в `.pdparams`, сверка с ONNX, перенумерация выходных слоёв под новый словарь |
+| `scripts/setup_env.sh` | среда обучения на Linux-машине с GPU: paddlepaddle-gpu, зависимости, предобученные веса |
+| `scripts/run_train.py` | обучение без ноутбуков: родной `tools/train.py` под `paddle.distributed.launch` с настройками прогона, автопродолжение |
 | `kaggle/ru_train_2xT4.ipynb` | обучение на Kaggle 2× T4 в 12-часовых сессиях с выгрузкой чекпоинтов и продолжением |
 | `kaggle/ru_export_eval_predict.ipynb` | экспорт, ONNX, сверка бэкендов, тест чекпоинтов, предсказания на реальных строках |
 | `kaggle/ru_vlm_check_stroyinf.ipynb` | чтение спорных строк VLM (PaddleOCR-VL через vLLM); собирается `kaggle/make_vlm_nb.py` |
@@ -97,6 +99,14 @@ pip install "paddlex[ocr-core]>=3.7,<3.8"                      # проверк�
 
 Предобученные веса PP-OCRv6 small кладутся в `./pretrain/PP-OCRv6_small_rec_pretrained.pdparams`
 (ссылка в `docs/version3.x/module_usage/text_recognition.md`).
+
+Для обучения на Linux-машине с NVIDIA GPU один скрипт ставит paddlepaddle-gpu 3.3.1 (cu126, установка с повторами),
+зависимости и предобученные веса, затем проверяет Paddle на GPU (переопределяется через `PADDLE_PKG`, `PADDLE_INDEX`,
+`PYTHON`):
+
+```bash
+bash ru_ocr/scripts/setup_env.sh
+```
 
 ## Данные
 
@@ -134,6 +144,26 @@ python -m paddle.distributed.launch --gpus 0,1 tools/train.py -c ru_ocr/configs/
     -o Train.dataset.data_dir=<кропы> "Train.dataset.label_file_list=[data/mydata_train_w_h.txt]" \
        Eval.dataset.data_dir=<кропы> "Eval.dataset.label_file_list=[data/mydata_val_w_h.txt]"
 ```
+
+`scripts/run_train.py` запускает тот же `tools/train.py` с настройками опубликованного прогона (fp16 AMP, батч 32 на
+карту, `sorted_batch_ratio` 0.8, `latest` каждые 2000 шагов, валидация каждые 10000, сохранение по SIGINT/SIGTERM) и
+сам выбирает, откуда стартовать:
+
+```bash
+# новый этап с весов предыдущего (новые оптимизатор и расписание LR), как ft3 -> ft4
+python ru_ocr/scripts/run_train.py --gpus 0,1 --out output/ft4 --init output/ft3/best_accuracy     --data-dir data/ru_root --train-labels data/ru_labels/all_train_clean_w_h.txt     --val-labels data/ru_labels/all_val5k_clean_w_h.txt
+```
+
+- После остановки (Ctrl+C сохраняет `latest` с местом в эпохе) та же команда продолжает с `<out>/latest`.
+  `--resume <префикс>` — продолжить другой чекпоинт, `--no-auto-resume` — не брать `latest`.
+- Чекпоинт, прошедший все эпохи, не принимается, вместо «продолжения» без единого шага: нужен другой `--out` с
+  `--init` или больше `--epochs`.
+- Без `--init` старт с `Global.pretrained_model` из конфига (официальные веса в `./pretrain/`).
+- `--epochs`, `--lr`, `--warmup-epochs`, `--batch`, `--workers`, `--save-steps`, `--eval-steps`, `--no-amp` меняют
+  обычные настройки; остальное — через `-o`, как в `tools/train.py`. `--dry-run` печатает команду; логи каждой карты
+  в `<out>/dist_log/`.
+
+Общее для обоих способов:
 
 - Выходные слои CTC и NRTR учатся с нуля: в официальном словаре v6 нет кириллицы. Со случайных весов —
   `-o Global.pretrained_model=`; только с весов чекпоинта — `Global.pretrained_model=<префикс>`.
