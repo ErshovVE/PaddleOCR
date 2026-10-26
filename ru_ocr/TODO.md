@@ -34,18 +34,3 @@ and the same code runnable locally.
   ensemble with a python backend, or on the client — choose one and document it.
 - A client example and a `docker run` command.
 - Throughput with `perf_analyzer`, next to the numbers from item 1.
-
-## 3. Describe how the dataset is built and generated
-
-In README (Data) and EXPERIMENT (5. Data), EN and RU:
-
-- **Synthetic lines** (`doc-generator`): fonts and their rules, the 4 × 500k generation, how text and layouts are
-  chosen, what the crops and label files look like.
-- **Real lines** (`ocr_markup`): stroyinf crops cut by the text layer (`POST /run`), v2 and the modern batch
-  (documents from 1992 on).
-- **Assembly:**
-  - `add_wh.py` and `merge_labels.py`, the common root of links;
-  - train/val split: only the new source is split and appended to the existing train/val;
-  - label cleaning (section 7);
-  - packing for Kaggle with `pack_dataset.py --format tar`.
-- Commands to rebuild the label files from scratch, and the sizes of each part.

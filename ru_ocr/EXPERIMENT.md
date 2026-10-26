@@ -84,15 +84,111 @@ The ported RepSVTR (`configs/ru_RepSVTR_rec_150525.yml`) is kept as a baseline w
 | **stroyinf v2**: 1 700 Soviet-era standards (typewriter scans) | 609 713 (train 580 800 / val 28 913) | PDF text layer, filtered |
 | **stroyinf modern**: 1 000 standards and codes ≥ 1992 (ГОСТ, ГОСТ Р, СП, СНиП, РД) | 1 082 620 (train 1 060 968 / val 21 652) | PDF text layer, filtered |
 
-- The synthetic lines use 40 free-licensed fonts (caps-only fonts and fonts with missing glyphs removed) and are
-  balanced by length, font and character frequency.
-- Real lines are crops of PDF pages cut along the text layer (`ocr_markup`), pages below a text-layer quality
-  threshold are skipped, no OCR is run. Filters drop vertical text, lines without letters or digits, filler lines
-  and lines with an implausible characters-per-width ratio.
-- Validation: the val folder of stroyinf v2 (whole documents never seen in training) plus the last 2 % of
-  stroyinf modern; `all_val5k` is a fixed random sample of 5 000 of these lines.
+Total training set before cleaning: **4 125 475** lines, 40 % of them real.
 
-Total training set before cleaning: **4 125 475** lines.
+### 5.1 Synthetic lines
+
+The lines come from the balancer of [doc-generator](https://github.com/ErshovVE/doc-generator) (`docgen.balance`,
+described in its `docs/BALANCER.md`):
+
+1. A batch of 50 pages is generated as `.docx` and converted to PDF by LibreOffice.
+2. The lines are cut out of the PDF with their boxes, font, size and style (`ocr_markup/backend/pdf_extract.py`).
+3. A line is kept only if it fills a deficit of the target distribution on every axis. The other lines are never
+   written.
+
+One line is one crop, and its label is the exact text that was drawn.
+
+- **Text.**
+  - Phase 1: ordinary 10-page documents with Faker text in Russian and English (headings, paragraphs, lists,
+    tables).
+  - When fewer than 10 % of a batch's lines are accepted, phase 2 generates lines to order. Each missing cell
+    (font, style, size, length, language, numbers) gets a sentence cut to length, with numbers and punctuation
+    placed where real text has them. A page is a stack of such lines.
+- **Targets.**
+  - Font: 40 families, equal shares.
+  - Size: 8–24 pt, flat on 8–14 pt and falling to 20 % at 24 pt.
+  - Style: regular / italic / bold / bold italic as 40 / 25 / 25 / 10 %; 2 % underlined.
+  - Length: 1–250 characters, flat on 1–125, at least 20 % of that level on 126–250.
+  - Language: Russian / English / no letters as 47.5 / 47.5 / 5 %.
+  - Numbers: 10 % of lines with a number of 1–25 digits.
+  - Punctuation and rare forms:
+    - 75 % of lines have punctuation;
+    - Roman numerals appear in 2 % of lines, CAPS in 3 %, dot leaders in 2 %;
+    - every dictionary character occurs at least 5 % as often as the mean of its group, so `ё ъ Ъ Ы Ь` are
+      present.
+  - Tolerance: a part counts as balanced when every bin is within 1 p.p. of its target.
+- **Fonts.** The dataset is public, so all 40 families have free licenses: SIL OFL, Apache 2.0, CC BY, GPL with the
+  font exception and others. Commercial fonts and the Microsoft core fonts are out. Each family was checked on a
+  glyph sheet:
+  - caps-only fonts were removed;
+  - styles a family does not really have are not ordered, so the balance stays honest;
+  - for each font, lines with characters it lacks or draws blank are rejected.
+
+  This check removed fonts with broken Cyrillic, with `й` lacking its breve, and with `т` drawn as `п`.
+- **Labels follow the dictionary.** Typographic dashes and quotes are drawn as such, but the label holds the
+  dictionary character: `–` → `—`, `“ ” „` → `"`, `‘ ’` → `'`. Real lines use the same table. A line with a
+  character outside the dictionary is rejected.
+- **Parts 1–4.** About 500 k lines each, each balanced on its own:
+  - seeds 1, 2 000 000, 3 000 000 and 4 000 000; they must be far apart, because the phase-1 document seed is
+    `seed + 10⁶ + batch·1000 + document`;
+  - worst deviation 0.56–0.72 p.p. (punctuation);
+  - 90–91 % unique texts;
+  - 1.5–2 h per part on 4 cores.
+- **Part 5** (seed 5 000 000) degrades every page before the lines are cut.
+  - The effects are ink, paper and post-processing effects of [Augraphy](https://github.com/sparkfish/augraphy).
+    They do not move pixels, so the boxes stay exact, and they are consistent across a page (stains, shadows,
+    bleed-through).
+  - Each line is compared to its clean copy; a line that became unreadable is taken from the clean page instead.
+  - 85 % of part 5 lines are degraded.
+  - Augraphy costs ~3 s per page: 5 h 14 min for the part.
+
+### 5.2 Real lines (stroyinf)
+
+The real lines are scans of Russian building standards from files.stroyinf.ru, downloaded by
+`ocr_markup/scripts/scrape/stroyinf.py`:
+
+- v2: documents up to 1991, typewritten; ~2 250 downloaded, ~1 700 gave lines;
+- modern: 1 000 documents from 1992 on.
+
+Every PDF has an invisible text layer made by the site's own OCR. [ocr_markup](https://github.com/ErshovVE/ocr_markup)
+cuts the crops along that layer (`POST /run` with `extract_pdf_text_layer`, `pdf_ocr_fallback: false`); no OCR is
+run.
+
+- A page is taken only when the quality of its layer is ≥ 0.98 (`text_layer_quality.PAGE_MIN_QUALITY`). At this
+  threshold ~3 % of lines are bad, against ~12 % at 0.95–0.98.
+- Labels are normalized by the same table as the synthetic ones. Lines with characters outside the dictionary go
+  to `needs_review` and are not used: `• © £ | ■ ®` are garbage of the foreign OCR.
+- The `merge_labels.py` filters drop 4.7 % of v2:
+  - lines without letters or digits (lone `+ — )`, often mislabelled);
+  - vertical text on the margins;
+  - crops much wider than their text (< 0.8 characters per unit of w/h: table rows with the number cut off);
+  - crops much narrower than their text (> 4 characters per unit of w/h);
+  - dot leaders `.....`, whose dot count does not follow the picture.
+- These rules do not catch foreign OCR errors made of dictionary characters (`ЭВМ` → `Э Ш`). The label cleaning of
+  section 7 removes them.
+
+### 5.3 Assembly and split
+
+- **Data root.** One folder of links: `ru_root/synth` → the doc-generator output, `ru_root/stroyinf` → the
+  ocr_markup data. Label paths are relative to it. Label files have 4 columns (`path, text, width, height`); both
+  generators write them (`append_crop_size`).
+- **Split.**
+  - All synthetic lines go to train.
+  - v2: validation is one whole extraction folder, 160 documents that training never sees.
+  - Modern: validation is the last 2 % of its merged file. Crops are written document by document, so these are
+    the last documents; one document may be cut at the border.
+  - A new source is split on its own and appended to the existing train and val; the old splits are not touched.
+- **Label files.**
+  - `all_train` = synthetic parts 1–4 + v2 train + modern train + synthetic part 5.
+  - `all_val` = v2 val + modern val (50 565).
+  - `all_val5k` = `random.Random(0).sample(all_val, 5000)`.
+  - After cleaning (section 7) the same files exist with `_clean`: `all_train_clean` 3 995 865, `all_val_clean`
+    42 510, `all_val5k_clean` 4 241.
+- **Kaggle.** `pack_dataset.py --format tar` packs the crops into ~1 GB `.tarpack` archives grouped by folder. The
+  notebooks read these Kaggle datasets: `ru-ocr-synth-part1…5-tar`, `ru-ocr-stroyinf-tar`,
+  `ru-ocr-stroyinf-modern-tar` and `ru-ocr-labels`.
+
+The commands are in [README.md, Data](README.md#data).
 
 ## 6. First training runs
 

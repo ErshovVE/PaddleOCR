@@ -108,32 +108,107 @@ bash ru_ocr/scripts/setup_env.sh
 
 ## Data
 
-`MultiScaleDataSet` with `ds_width: true` reads 4 columns: `path<TAB>text<TAB>width<TAB>height`; the configs
-read crops from `./data/ru_root/` and label files from `./data/ru_labels/`.
+`MultiScaleDataSet` with `ds_width: true` reads 4 columns: `path<TAB>text<TAB>width<TAB>height`. The configs read
+crops from `./data/ru_root/` and label files from `./data/ru_labels/`. How the data were made and why is described
+in [EXPERIMENT.md, section 5](EXPERIMENT.md#5-data). The steps below rebuild the label files from scratch; the
+repositories `doc-generator` and `ocr_markup` sit next to this one.
 
-If a crop generator writes only 2 columns:
+**1. Synthetic lines** (doc-generator, Docker: LibreOffice and the fonts are in the image). There are four parts of
+500 k lines, each in its own folder with its own seed, plus part 5 with page degradation:
+
+```bash
+cd ../doc-generator
+docker compose --profile balancer run -d balancer --config config.yaml --n-lines 500000 --append-crop-size --parallel 4 \
+    --seed 1 --out out/synth_2m/part1            # part2..4: --seed 2000000 / 3000000 / 4000000
+docker compose --profile balancer run -d balancer --config out/synth_2m/config_part5.yaml --n-lines 500000 \
+    --append-crop-size --parallel 4 --seed 5000000 --out out/synth_2m/part5   # balancer.degrade.page_share: 1.0
+```
+
+- An interrupted run continues where it stopped.
+- The exit code is 0 when the part is balanced; `balance_report.html` in the part folder shows it.
+- Fonts are in `doc-generator/data/fonts`, with their licenses in `data/fonts/licenses/`.
+
+**2. Real lines** (ocr_markup):
+
+```bash
+cd ../ocr_markup
+python scripts/scrape/stroyinf.py --out data/stroyinf --limit 2250                       # v2: up to 1991
+python scripts/scrape/stroyinf.py --out data/stroyinf_modern --min-year 1992 --max-year 2100 --limit 1000 \
+    --group ГОСТ --group "ГОСТ Р" --group СП --group СНиП --group РД
+python -m uvicorn backend.main:app --port 8000
+```
+
+Then post one job per folder of PDFs (v2 was processed in 15 portions, modern in 2), and follow it with
+`GET /status/<job_id>`:
+
+```bash
+curl -X POST localhost:8000/run -H "Content-Type: application/json" -d '{
+  "input_dir": "data/stroyinf_modern/pdf_part1", "output_dir": "data/stroyinf_modern_textlayer_part1",
+  "extract_pdf_text_layer": true, "pdf_ocr_fallback": false, "append_crop_size": true,
+  "normalize_labels": true, "alphabet_file": "../PaddleOCR/ru_ocr/dict/ru_dict_ext011026.txt"}'
+```
+
+Each output folder holds `crops/` and `good.txt`. Lines with characters outside the dictionary go to
+`needs_review` and are not used.
+
+**3. Data root and label files** (PaddleOCR root; on Windows use `mklink /J` instead of `ln -s`):
+
+```bash
+mkdir -p data/ru_root data/ru_labels
+ln -s ../../../doc-generator/out/synth_2m data/ru_root/synth
+ln -s ../../../ocr_markup/data data/ru_root/stroyinf
+S=../doc-generator/out/synth_2m M=../ocr_markup/data
+FILTERS="--drop-vertical --drop-no-alnum --drop-filler --min-cpu 0.8 --max-cpu 4"
+python ru_ocr/tools/merge_labels.py --root $S --inputs $S/part1 $S/part2 $S/part3 $S/part4 --label dataset.tsv \
+    --prefix synth --out-prefix data/ru_labels/synth_2m
+python ru_ocr/tools/merge_labels.py --root $S --inputs $S/part5 --label dataset.tsv \
+    --prefix synth --out-prefix data/ru_labels/synth_part5
+python ru_ocr/tools/merge_labels.py --root $M --inputs $M/stroyinf_textlayer_v2 $M/stroyinf_textlayer_v2_part* \
+    --val stroyinf_textlayer_v2_part1 $FILTERS --prefix stroyinf --out-prefix data/ru_labels/stroyinf_all
+python ru_ocr/tools/merge_labels.py --root $M --inputs $M/stroyinf_modern_textlayer_part1 \
+    $M/stroyinf_modern_textlayer_part2 $FILTERS --prefix stroyinf --out-prefix data/ru_labels/stroyinf_modern_all
+cd data/ru_labels
+n=$(wc -l < stroyinf_modern_all_train_w_h.txt); v=$((n / 50))          # modern: val = the last 2 %
+head -n $((n - v)) stroyinf_modern_all_train_w_h.txt > stroyinf_modern_train_w_h.txt
+tail -n $v stroyinf_modern_all_train_w_h.txt > stroyinf_modern_val_w_h.txt
+cat synth_2m_train_w_h.txt stroyinf_all_train_w_h.txt stroyinf_modern_train_w_h.txt synth_part5_train_w_h.txt \
+    > all_train_w_h.txt
+cat stroyinf_all_val_w_h.txt stroyinf_modern_val_w_h.txt > all_val_w_h.txt
+python -c "import random; v = open('all_val_w_h.txt', encoding='utf-8').read().splitlines(); \
+open('all_val5k_w_h.txt', 'w', encoding='utf-8', newline='\n').write('\n'.join(random.Random(0).sample(v, 5000)) + '\n')"
+```
+
+Expected sizes:
+
+| File | Lines |
+|---|---|
+| `synth_2m` train | 1 985 902 |
+| `synth_part5` train | 497 805 |
+| `stroyinf_all` train / val | 580 800 / 28 913 |
+| `stroyinf_modern` train / val | 1 060 968 / 21 652 |
+| `all_train` | 4 125 475 |
+| `all_val` | 50 565 |
+
+The `*_clean` files come from the label cleaning (see below).
+
+- The filters (`--drop-*`, `--min-cpu/--max-cpu`) are for text layers of someone else's OCR. Do not apply them to
+  synthetic lines, which are balanced already.
+- When a new source is added, split only that source and append it to the existing `all_train` / `all_val`.
+- If a crop generator writes only 2 columns, `add_wh.py` adds the width and height and splits off the tail as val
+  (crops are written document by document, so val holds whole documents):
 
 ```bash
 python ru_ocr/tools/add_wh.py --label-file <crops>/good.txt --data-dir <crops> --out-prefix data/mydata --val-ratio 0.1
 ```
 
-The validation part is the tail of the file: crops are written document by document, so val holds whole documents.
-
-Several generator folders (each with its own `crops/…`) are merged by `merge_labels.py`: paths relative to a
-common root, val by whole folders. Sources with different roots (synthetic `doc-generator` lines, `ocr_markup`
-crops) are joined in one root folder of links, and `--prefix` adds the link name to the paths:
+**4. Archives for Kaggle.** `.tarpack` archives of ~1 GB are grouped by folder. Upload them as they are: Kaggle
+unpacks a `.zip` into single files.
 
 ```bash
-# data/ru_root/synth -> doc-generator/out/synth_2m, data/ru_root/stroyinf -> ocr_markup/data
-python ru_ocr/tools/merge_labels.py --root <synth_2m> --inputs <synth_2m>/part1 <synth_2m>/part2 \
-    --label dataset.tsv --prefix synth --out-prefix data/ru_labels/synth_2m
-python ru_ocr/tools/merge_labels.py --root <ocr_markup/data> --inputs <stroyinf folders> --val <val folder> \
-    --drop-vertical --drop-no-alnum --drop-filler --min-cpu 0.8 --max-cpu 4 --prefix stroyinf \
-    --out-prefix data/ru_labels/stroyinf_all
+python ru_ocr/tools/pack_dataset.py --root data/ru_root --labels data/ru_labels/stroyinf_modern_train_w_h.txt \
+    data/ru_labels/stroyinf_modern_val_w_h.txt --format tar --out data/kaggle_full/ru-ocr-stroyinf-modern-tar
+python ru_ocr/tools/pack_dataset.py --from-zip <old>.zip --out <folder>     # repack an existing zip
 ```
-
-The filters (`--drop-*`, `--min-cpu/--max-cpu`) are for text layers of someone else's OCR; do not apply them to
-synthetic lines, which are balanced already.
 
 ## Training
 

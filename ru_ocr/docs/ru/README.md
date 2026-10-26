@@ -111,32 +111,108 @@ bash ru_ocr/scripts/setup_env.sh
 
 ## Данные
 
-`MultiScaleDataSet` с `ds_width: true` читает 4 колонки: `путь<TAB>текст<TAB>ширина<TAB>высота`; конфиги читают
-кропы из `./data/ru_root/`, разметку — из `./data/ru_labels/`.
+`MultiScaleDataSet` с `ds_width: true` читает 4 колонки: `путь<TAB>текст<TAB>ширина<TAB>высота`. Конфиги читают
+кропы из `./data/ru_root/`, разметку — из `./data/ru_labels/`. Как и зачем собраны данные, описано в
+[EXPERIMENT.md, раздел 5](EXPERIMENT.md#5-данные). Ниже — как собрать файлы разметки с нуля; репозитории
+`doc-generator` и `ocr_markup` лежат рядом с этим.
 
-Если генератор кропов пишет только 2 колонки:
+**1. Синтетика** (doc-generator, Docker: LibreOffice и шрифты в образе). Четыре части по 500 тыс. строк, каждая в
+своей папке со своим сидом, плюс часть 5 с порчей страниц:
+
+```bash
+cd ../doc-generator
+docker compose --profile balancer run -d balancer --config config.yaml --n-lines 500000 --append-crop-size --parallel 4 \
+    --seed 1 --out out/synth_2m/part1            # part2..4: --seed 2000000 / 3000000 / 4000000
+docker compose --profile balancer run -d balancer --config out/synth_2m/config_part5.yaml --n-lines 500000 \
+    --append-crop-size --parallel 4 --seed 5000000 --out out/synth_2m/part5   # balancer.degrade.page_share: 1.0
+```
+
+- Прерванный прогон продолжается с места остановки.
+- Код выхода 0, когда часть выровнена; это видно в `balance_report.html` в папке части.
+- Шрифты лежат в `doc-generator/data/fonts`, их лицензии — в `data/fonts/licenses/`.
+
+**2. Реальные строки** (ocr_markup):
+
+```bash
+cd ../ocr_markup
+python scripts/scrape/stroyinf.py --out data/stroyinf --limit 2250                       # v2: до 1991 года
+python scripts/scrape/stroyinf.py --out data/stroyinf_modern --min-year 1992 --max-year 2100 --limit 1000 \
+    --group ГОСТ --group "ГОСТ Р" --group СП --group СНиП --group РД
+python -m uvicorn backend.main:app --port 8000
+```
+
+Дальше одно задание на каждую папку с PDF (v2 обрабатывался 15 порциями, modern — 2), ход задания — через
+`GET /status/<job_id>`:
+
+```bash
+curl -X POST localhost:8000/run -H "Content-Type: application/json" -d '{
+  "input_dir": "data/stroyinf_modern/pdf_part1", "output_dir": "data/stroyinf_modern_textlayer_part1",
+  "extract_pdf_text_layer": true, "pdf_ocr_fallback": false, "append_crop_size": true,
+  "normalize_labels": true, "alphabet_file": "../PaddleOCR/ru_ocr/dict/ru_dict_ext011026.txt"}'
+```
+
+В каждой выходной папке — `crops/` и `good.txt`. Строки с символами вне словаря уходят в `needs_review` и не
+используются.
+
+**3. Корень данных и файлы разметки** (из корня PaddleOCR; на Windows вместо `ln -s` — `mklink /J`):
+
+```bash
+mkdir -p data/ru_root data/ru_labels
+ln -s ../../../doc-generator/out/synth_2m data/ru_root/synth
+ln -s ../../../ocr_markup/data data/ru_root/stroyinf
+S=../doc-generator/out/synth_2m M=../ocr_markup/data
+FILTERS="--drop-vertical --drop-no-alnum --drop-filler --min-cpu 0.8 --max-cpu 4"
+python ru_ocr/tools/merge_labels.py --root $S --inputs $S/part1 $S/part2 $S/part3 $S/part4 --label dataset.tsv \
+    --prefix synth --out-prefix data/ru_labels/synth_2m
+python ru_ocr/tools/merge_labels.py --root $S --inputs $S/part5 --label dataset.tsv \
+    --prefix synth --out-prefix data/ru_labels/synth_part5
+python ru_ocr/tools/merge_labels.py --root $M --inputs $M/stroyinf_textlayer_v2 $M/stroyinf_textlayer_v2_part* \
+    --val stroyinf_textlayer_v2_part1 $FILTERS --prefix stroyinf --out-prefix data/ru_labels/stroyinf_all
+python ru_ocr/tools/merge_labels.py --root $M --inputs $M/stroyinf_modern_textlayer_part1 \
+    $M/stroyinf_modern_textlayer_part2 $FILTERS --prefix stroyinf --out-prefix data/ru_labels/stroyinf_modern_all
+cd data/ru_labels
+n=$(wc -l < stroyinf_modern_all_train_w_h.txt); v=$((n / 50))          # modern: val — последние 2 %
+head -n $((n - v)) stroyinf_modern_all_train_w_h.txt > stroyinf_modern_train_w_h.txt
+tail -n $v stroyinf_modern_all_train_w_h.txt > stroyinf_modern_val_w_h.txt
+cat synth_2m_train_w_h.txt stroyinf_all_train_w_h.txt stroyinf_modern_train_w_h.txt synth_part5_train_w_h.txt \
+    > all_train_w_h.txt
+cat stroyinf_all_val_w_h.txt stroyinf_modern_val_w_h.txt > all_val_w_h.txt
+python -c "import random; v = open('all_val_w_h.txt', encoding='utf-8').read().splitlines(); \
+open('all_val5k_w_h.txt', 'w', encoding='utf-8', newline='\n').write('\n'.join(random.Random(0).sample(v, 5000)) + '\n')"
+```
+
+Ожидаемые размеры:
+
+| Файл | Строк |
+|---|---|
+| `synth_2m`, train | 1 985 902 |
+| `synth_part5`, train | 497 805 |
+| `stroyinf_all`, train / val | 580 800 / 28 913 |
+| `stroyinf_modern`, train / val | 1 060 968 / 21 652 |
+| `all_train` | 4 125 475 |
+| `all_val` | 50 565 |
+
+Файлы `*_clean` получаются при чистке разметки (ниже).
+
+- Фильтры (`--drop-*`, `--min-cpu/--max-cpu`) — для текстового слоя чужого OCR. Синтетику ими не трогать: она уже
+  сбалансирована.
+- При добавлении нового источника делится только он, и его части дописываются к существующим `all_train` /
+  `all_val`.
+- Если генератор кропов пишет только 2 колонки, `add_wh.py` дописывает ширину и высоту и отделяет хвост как val
+  (кропы пишутся по документам, поэтому в val попадают целые документы):
 
 ```bash
 python ru_ocr/tools/add_wh.py --label-file <кропы>/good.txt --data-dir <кропы> --out-prefix data/mydata --val-ratio 0.1
 ```
 
-Валидационная часть — хвост файла: кропы пишутся по документам, поэтому в val попадают целые документы.
-
-Несколько папок генераторов (у каждой свои `crops/…`) сводит `merge_labels.py`: пути — от общего корня, val —
-целые папки. Источники с разными корнями (синтетика `doc-generator`, кропы `ocr_markup`) собираются в одну
-папку-корень из ссылок, а `--prefix` дописывает имя ссылки к путям:
+**4. Архивы для Kaggle.** Архивы `.tarpack` по ~1 ГБ, сгруппированные по папкам. Загружайте их как есть: `.zip`
+Kaggle распаковывает в отдельные файлы.
 
 ```bash
-# data/ru_root/synth -> doc-generator/out/synth_2m, data/ru_root/stroyinf -> ocr_markup/data
-python ru_ocr/tools/merge_labels.py --root <synth_2m> --inputs <synth_2m>/part1 <synth_2m>/part2 \
-    --label dataset.tsv --prefix synth --out-prefix data/ru_labels/synth_2m
-python ru_ocr/tools/merge_labels.py --root <ocr_markup/data> --inputs <папки stroyinf> --val <папка для val> \
-    --drop-vertical --drop-no-alnum --drop-filler --min-cpu 0.8 --max-cpu 4 --prefix stroyinf \
-    --out-prefix data/ru_labels/stroyinf_all
+python ru_ocr/tools/pack_dataset.py --root data/ru_root --labels data/ru_labels/stroyinf_modern_train_w_h.txt \
+    data/ru_labels/stroyinf_modern_val_w_h.txt --format tar --out data/kaggle_full/ru-ocr-stroyinf-modern-tar
+python ru_ocr/tools/pack_dataset.py --from-zip <старый>.zip --out <папка>     # перепаковать готовый zip
 ```
-
-Фильтры (`--drop-*`, `--min-cpu/--max-cpu`) — для текстового слоя чужого OCR; синтетику ими не трогать: она уже
-сбалансирована.
 
 ## Обучение
 
