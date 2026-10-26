@@ -7,7 +7,7 @@ conversion runs in two steps, each in its own process:
     python ru_ocr/tools/convert_torchocr_rec.py extract --src model_20.pth --out weights.npz
 
     # 2. needs paddle only: arrays -> .pdparams for a PaddleOCR config, optional ONNX check
-    python ru_ocr/tools/convert_torchocr_rec.py convert -c ru_ocr/configs/ru_RepSVTR_rec_150525.yml \
+    python ru_ocr/tools/convert_torchocr_rec.py convert -c ru_ocr/configs/ru_RepSVTR_rec_old.yml \
         --src weights.npz --out rec.pdparams --onnx rec.onnx --widths 320 960 1600
 
 Mapping rules: BatchNorm running_mean/var -> _mean/_variance, weights of nn.Linear are

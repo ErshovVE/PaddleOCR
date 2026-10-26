@@ -180,7 +180,7 @@ class TestHeadOutChannels:
 
 def test_linear_weight_keys_from_paddle_model(repo_root):
     model, character = conv.build_paddle_model(
-        str(repo_root / "ru_ocr/configs/ru_RepSVTR_rec_150525.yml")
+        str(repo_root / "ru_ocr/configs/ru_RepSVTR_rec_old.yml")
     )
     keys = conv.linear_weight_keys(model)
     shapes = {k: v.shape for k, v in model.state_dict().items()}
@@ -213,12 +213,12 @@ def test_reproduces_onnx_model(repo_root, tmp_path):
         cwd=repo_root,
     )
     code = conv.convert(
-        str(repo_root / "ru_ocr/configs/ru_RepSVTR_rec_150525.yml"),
+        str(repo_root / "ru_ocr/configs/ru_RepSVTR_rec_old.yml"),
         str(npz),
         str(tmp_path / "rec.pdparams"),
         onnx_path=str(data / "rec_150525.onnx"),
         widths=[320, 960, 1600],
-        src_dict=str(repo_root / "ru_ocr/dict/ru_dict_ext100124.txt"),
+        src_dict=str(repo_root / "ru_ocr/dict/ru_dict_old.txt"),
     )
     assert code == 0
 
@@ -282,6 +282,6 @@ class TestRemapVocab:
 
 
 def test_new_dict_extends_old(repo_root):
-    old = (repo_root / "ru_ocr/dict/ru_dict_ext100124.txt").read_text(encoding="utf-8")
-    new = (repo_root / "ru_ocr/dict/ru_dict_ext011026.txt").read_text(encoding="utf-8")
+    old = (repo_root / "ru_ocr/dict/ru_dict_old.txt").read_text(encoding="utf-8")
+    new = (repo_root / "ru_ocr/dict/ru_dict.txt").read_text(encoding="utf-8")
     assert new.split("\n") == old.split("\n") + ["°", "—"]

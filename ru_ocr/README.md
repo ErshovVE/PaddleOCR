@@ -55,7 +55,7 @@ anew. `best_accuracy` is chosen on the validation every 10 000 steps.
 |---|---|
 | Model | PP-OCRv6 small: PPLCNetV4 backbone, `train_seq_len: -1`; CTC head with LightSVTR neck (dims 120, depth 2); NRTR head (dim 384, training only) |
 | Loss | CTC + NRTR (`MultiLoss`) |
-| Dictionary | `dict/ru_dict_ext011026.txt`, 164 characters + space; `max_text_length` 250 |
+| Dictionary | `dict/ru_dict.txt`, 164 characters + space; `max_text_length` 250 |
 | Optimizer | Adam (β 0.9 / 0.999), L2 3e-5, cosine LR |
 | Batch | 32 per card, 2 cards; fp16 AMP (`scale_loss` 1024, dynamic) |
 | Input | height 32 / 48 / 64 (multi-scale) in training, 48 in validation; width by the line's aspect ratio, batch up to 2 400 px |
@@ -69,9 +69,9 @@ anew. `best_accuracy` is chosen on the validation every 10 000 steps.
 | Path | What |
 |---|---|
 | `configs/ru_PP-OCRv6_small_rec.yml` | main model: PP-OCRv6 small, CTC length during training = width / 8, batches up to 2 400 px, concatenation with a space, scan augmentations, validation like inference, metrics by length |
-| `configs/ru_RepSVTR_rec_150525.yml` | baseline: RepSVTR with weights ported from a PyTorch model (`se_gate: none`), same data and metrics |
-| `dict/ru_dict_ext011026.txt` | dictionary: 164 characters (the space is added by the code) |
-| `dict/ru_dict_ext100124.txt` | dictionary of the old PyTorch model (162 characters), used by the converter |
+| `configs/ru_RepSVTR_rec_old.yml` | baseline: RepSVTR with weights ported from a PyTorch model (`se_gate: none`), same data and metrics |
+| `dict/ru_dict.txt` | dictionary: 164 characters (the space is added by the code) |
+| `dict/ru_dict_old.txt` | dictionary of the old PyTorch model (162 characters), used by the converter |
 | `tools/add_wh.py` | `path\ttext` → `path\ttext\tw\th` (needed by `MultiScaleDataSet` with `ds_width: true`) + train/val split |
 | `tools/merge_labels.py` | merges the label files of several crop folders under one root, filters text-layer labels, val by whole folders |
 | `tools/pack_dataset.py` | packs the crops the labels reference into a few archives (`--format tar` → `*.tarpack`), repacks zips (`--from-zip`) |
@@ -147,7 +147,7 @@ Then post one job per folder of PDFs (v2 was processed in 15 portions, modern in
 curl -X POST localhost:8000/run -H "Content-Type: application/json" -d '{
   "input_dir": "data/stroyinf_modern/pdf_part1", "output_dir": "data/stroyinf_modern_textlayer_part1",
   "extract_pdf_text_layer": true, "pdf_ocr_fallback": false, "append_crop_size": true,
-  "normalize_labels": true, "alphabet_file": "../PaddleOCR/ru_ocr/dict/ru_dict_ext011026.txt"}'
+  "normalize_labels": true, "alphabet_file": "../PaddleOCR/ru_ocr/dict/ru_dict.txt"}'
 ```
 
 Each output folder holds `crops/` and `good.txt`. Lines with characters outside the dictionary go to
@@ -329,8 +329,8 @@ torch and paddle do not work in one process on Windows, so the two steps run in 
 
 ```bash
 python ru_ocr/tools/convert_torchocr_rec.py extract --src model_20.pth --out weights.npz          # python with torch
-python ru_ocr/tools/convert_torchocr_rec.py convert -c ru_ocr/configs/ru_RepSVTR_rec_150525.yml \
-    --src-dict ru_ocr/dict/ru_dict_ext100124.txt --src weights.npz --out rec.pdparams --onnx rec.onnx  # python with paddle
+python ru_ocr/tools/convert_torchocr_rec.py convert -c ru_ocr/configs/ru_RepSVTR_rec_old.yml \
+    --src-dict ru_ocr/dict/ru_dict_old.txt --src weights.npz --out rec.pdparams --onnx rec.onnx  # python with paddle
 ```
 
 `--src-dict` is the dictionary the torch model was trained with: the model is checked against ONNX on it, then the

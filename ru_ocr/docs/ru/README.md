@@ -56,7 +56,7 @@
 |---|---|
 | Модель | PP-OCRv6 small: бэкбон PPLCNetV4, `train_seq_len: -1`; CTC-голова с neck LightSVTR (dims 120, depth 2); NRTR-голова (dim 384, только при обучении) |
 | Loss | CTC + NRTR (`MultiLoss`) |
-| Словарь | `dict/ru_dict_ext011026.txt`, 164 символа + пробел; `max_text_length` 250 |
+| Словарь | `dict/ru_dict.txt`, 164 символа + пробел; `max_text_length` 250 |
 | Оптимизатор | Adam (β 0.9 / 0.999), L2 3e-5, cosine LR |
 | Батч | 32 на карту, 2 карты; fp16 AMP (`scale_loss` 1024, динамический) |
 | Вход | высота 32 / 48 / 64 (multi-scale) при обучении, 48 при валидации; ширина по пропорциям строки, батч до 2 400 px |
@@ -72,9 +72,9 @@
 | Путь | Что |
 |---|---|
 | `configs/ru_PP-OCRv6_small_rec.yml` | основная модель: PP-OCRv6 small, длина CTC при обучении = ширина / 8, батчи до 2 400 px, склейки с пробелом, аугментации сканов, валидация как инференс, метрики по длине |
-| `configs/ru_RepSVTR_rec_150525.yml` | базовая линия: RepSVTR с весами, перенесёнными из PyTorch-модели (`se_gate: none`), те же данные и метрики |
-| `dict/ru_dict_ext011026.txt` | словарь: 164 символа (пробел добавляется кодом) |
-| `dict/ru_dict_ext100124.txt` | словарь старой PyTorch-модели (162 символа), нужен конвертеру |
+| `configs/ru_RepSVTR_rec_old.yml` | базовая линия: RepSVTR с весами, перенесёнными из PyTorch-модели (`se_gate: none`), те же данные и метрики |
+| `dict/ru_dict.txt` | словарь: 164 символа (пробел добавляется кодом) |
+| `dict/ru_dict_old.txt` | словарь старой PyTorch-модели (162 символа), нужен конвертеру |
 | `tools/add_wh.py` | `путь\tтекст` → `путь\tтекст\tw\th` (нужно `MultiScaleDataSet` с `ds_width: true`) + деление train/val |
 | `tools/merge_labels.py` | сводит разметку нескольких папок кропов к одному корню, фильтрует разметку текстового слоя, val — целыми папками |
 | `tools/pack_dataset.py` | упаковывает кропы, на которые ссылается разметка, в несколько архивов (`--format tar` → `*.tarpack`), перепаковывает zip (`--from-zip`) |
@@ -150,7 +150,7 @@ python -m uvicorn backend.main:app --port 8000
 curl -X POST localhost:8000/run -H "Content-Type: application/json" -d '{
   "input_dir": "data/stroyinf_modern/pdf_part1", "output_dir": "data/stroyinf_modern_textlayer_part1",
   "extract_pdf_text_layer": true, "pdf_ocr_fallback": false, "append_crop_size": true,
-  "normalize_labels": true, "alphabet_file": "../PaddleOCR/ru_ocr/dict/ru_dict_ext011026.txt"}'
+  "normalize_labels": true, "alphabet_file": "../PaddleOCR/ru_ocr/dict/ru_dict.txt"}'
 ```
 
 В каждой выходной папке — `crops/` и `good.txt`. Строки с символами вне словаря уходят в `needs_review` и не
@@ -335,8 +335,8 @@ python ru_ocr/scripts/benchmark.py --labels data/ru_labels/all_val5k_clean_w_h.t
 
 ```bash
 python ru_ocr/tools/convert_torchocr_rec.py extract --src model_20.pth --out weights.npz          # python с torch
-python ru_ocr/tools/convert_torchocr_rec.py convert -c ru_ocr/configs/ru_RepSVTR_rec_150525.yml \
-    --src-dict ru_ocr/dict/ru_dict_ext100124.txt --src weights.npz --out rec.pdparams --onnx rec.onnx  # python с paddle
+python ru_ocr/tools/convert_torchocr_rec.py convert -c ru_ocr/configs/ru_RepSVTR_rec_old.yml \
+    --src-dict ru_ocr/dict/ru_dict_old.txt --src weights.npz --out rec.pdparams --onnx rec.onnx  # python с paddle
 ```
 
 `--src-dict` — словарь, с которым обучалась torch-модель: модель сверяется с ONNX на нём, затем выходные слои

@@ -1,15 +1,15 @@
 # Baseline: RepSVTR from the May 2025 torchocr model (data/rec_150525), converted with
 # ru_ocr/tools/convert_torchocr_rec.py. Same data, augmentations, sampler and metrics as
 # ru_PP-OCRv6_small_rec.yml for a fair comparison. The torch model has no sigmoid in SE
-# blocks -> Backbone.se_gate: none. The torch model used ru_dict_ext100124: convert with
-# --src-dict ru_ocr/dict/ru_dict_ext100124.txt, the output rows of "°" and "—" start untrained.
+# blocks -> Backbone.se_gate: none. The torch model used ru_dict_old: convert with
+# --src-dict ru_ocr/dict/ru_dict_old.txt, the output rows of "°" and "—" start untrained.
 Global:
   debug: false
   use_gpu: true
   epoch_num: 15  # ~38.5M samples (2.57M lines x 15): with train_seq_len -1 every line trains CTC, so fewer epochs than 40-step setups
   log_smooth_window: 20
   print_batch_step: 100
-  save_model_dir: ./output/ru_RepSVTR_rec_150525
+  save_model_dir: ./output/ru_RepSVTR_rec_old
   save_epoch_step: 1
   eval_batch_step: [0, 5000]
   cal_metric_during_train: true
@@ -18,7 +18,7 @@ Global:
   save_inference_dir:
   use_visualdl: false
   infer_img: doc/imgs_words/ch/word_1.jpg
-  character_dict_path: ru_ocr/dict/ru_dict_ext011026.txt
+  character_dict_path: ru_ocr/dict/ru_dict.txt
   max_text_length: &max_text_length 250
   infer_mode: false
   use_space_char: true

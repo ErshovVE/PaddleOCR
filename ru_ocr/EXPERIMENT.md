@@ -64,7 +64,7 @@ All changes are config keys, **off by default**; upstream configs behave as befo
 
 **PP-OCRv6 small** (PPLCNetV4 backbone, 2.7 M parameters, LightSVTR neck, CTC + NRTR heads) with
 `train_seq_len: -1`. Its pretrained weights load except for the output layers: the official v6 dictionary has no
-Cyrillic, so the CTC and NRTR output layers are trained from scratch on our dictionary (`dict/ru_dict_ext011026.txt`:
+Cyrillic, so the CTC and NRTR output layers are trained from scratch on our dictionary (`dict/ru_dict.txt`:
 164 characters + space). Batches are up to 2 400 px wide at height 48, so lines up to ~250 characters keep their
 resolution.
 

@@ -30,7 +30,7 @@ Done: `scripts/benchmark.py` (any machine) and `kaggle/ru_benchmark.ipynb` (expo
 - Model repository for the ONNX Runtime backend and for the OpenVINO backend:
   - `config.pbtxt` with dynamic batch and width (`[-1, 3, 48, -1]`);
   - dynamic batching.
-- Pre-processing: resize to height 48 and normalize. Post-processing: CTC decode with `dict/ru_dict_ext011026.txt`. Done in an
+- Pre-processing: resize to height 48 and normalize. Post-processing: CTC decode with `dict/ru_dict.txt`. Done in an
   ensemble with a python backend, or on the client — choose one and document it.
 - A client example and a `docker run` command.
 - Throughput with `perf_analyzer`, next to the numbers from item 1.
