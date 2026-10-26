@@ -46,6 +46,7 @@ SAVE_EVERY = 500         # lines per worker between appends to vlm_part{k}.tsv
 MAX_TOKENS = 256         # generation limit per line
 SEED = 0
 OUT_DATASET = f"{KAGGLE_USER}/ru-ocr-stroyinf-modern-vlm"  # parts uploaded here every 10 min; None: no upload
+# OUT_DATASET = None  # smoke test (e.g. on ru-ocr-smoke): no upload, no secret needed
 WORK = "/kaggle/working"
 VLLM_PY = "/tmp/vv/bin/python"  # the venv with vllm, made by the install cell
 import os, subprocess, sys, time

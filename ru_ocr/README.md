@@ -101,6 +101,15 @@ Save & Run All. Checkpoints are uploaded to `CKPT_DATASET` every `SAVE_STEPS`; t
 newest one when that dataset is attached. Upload crops as `.tarpack`, not `.zip`: Kaggle unpacks a zip into single
 files and a session then fetches a million crops one by one for hours.
 
+### Smoke test
+
+Each notebook has a commented smoke setting in its first cell for a small dataset (a few hundred crops in one
+`.tarpack` with label files and review tables of the same names): training — `RUN_NAME, CKPT_DATASET, INIT_DATASET =
+"smoke", None, <weights dataset>` and a short `TIME_LIMIT`; export/eval — defaults, `RUN_PREDICTIONS = True` to cover
+the predictions too; VLM — `OUT_DATASET = None`. With the upload datasets set to `None` no secret is needed and nothing
+is written to the real datasets. Do not attach the full label datasets together with the small one: the notebooks find
+their files by name.
+
 ## Cleaning the labels of real lines
 
 The pipeline of [EXPERIMENT.md, section 7](EXPERIMENT.md#7-label-cleaning): a trained model reads every real
