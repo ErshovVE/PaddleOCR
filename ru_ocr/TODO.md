@@ -42,14 +42,17 @@ group onto `main` (upstream `dab3fe3`): the independent ones apply cleanly, the 
 
 | # | PR | Commits | Depends on |
 |---|---|---|---|
-| 1 | **CTC length in training** (`Backbone.train_seq_len`): rec backbones pool to 40 time steps in training, and Paddle silently zeroes the CTC loss of longer labels; width-proportional pooling fixes long lines | `8ad7cba` | — |
+| 1 | **CTC length in training** (`Backbone.train_seq_len`): rec backbones pool to 40 time steps in training, and Paddle silently zeroes the CTC loss of longer labels; width-proportional pooling fixes long lines (PPLCNetV3/V4, PPHGNetV2, PPHGNet_small) | `8ad7cba`, `c79bc9b` | — |
 | 2 | `RecMetric.length_buckets`: accuracy and edit distance by label length | `216f302` | — |
 | 3 | perf: vectorised `WarpMLS` (TIA distort / stretch / perspective), the bottleneck of data loading | `3ad4051`, `04ff9ca` | — |
 | 4 | `MultiScaleSampler`: mixed sorted / shuffled batches (`sorted_batch_ratio`), `pad_to_longest`, sampler for Eval; fix: `ratio_list` sampling in `MultiScaleDataSet`; fix: `RecResizeImg` in `inference.yml` when Eval uses a sampler | `c31cc69`, `cf29bd4`, `12a40b6` | — |
 | 5 | Augmentations: `RecConAug` with spaces and batch-width fit, capped TIA vertical shift, extra samples read only when they fit; document-scan augmentations in `RecAug` (rotate, downscale, JPEG, stroke); table rules next to the text | `303eefb`, `6bfc567`, `252e063`, `999f90f` | 4 |
 | 6 | Training: `Global.save_batch_step` and resume inside an epoch; `Global.save_on_signal` saves `latest` when stopped | `71ebae1`, `74b40fe` (without their `ru_ocr/` files) | 4 |
-| 7 | Docs: training on long text lines (`text_recognition.md` / `.en.md`) | `dd1d7db` | 1, 4, 5 (rewrite for what is merged) |
+| 7 | Docs: training on long text lines (`text_recognition.md` / `.en.md`) | `dd1d7db`, `c58988b` | 1, 4, 5 (rewrite for what is merged) |
 
+- **PR 1 is ready:** branch `feat/rec-train-seq-len` in the fork, from upstream `main`; tests and black/flake8 pass;
+  the title, text and checks are in [`upstream_prs/01-rec-train-seq-len.md`](upstream_prs/01-rec-train-seq-len.md).
+  Left: the CLA and opening the PR.
 - `fea334d` (`se_gate` for RepSVTR) is only for porting our old PyTorch weights: not proposed.
 - `71ebae1` and `74b40fe` also change `ru_ocr/` (smoke test, notebook): split those parts off.
 - Before opening:
