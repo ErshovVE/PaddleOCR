@@ -24,12 +24,7 @@ text. Two properties of this domain drive every decision below:
 
 The model must also be small enough for CPU inference (ONNX / OpenVINO).
 
-## 2. Starting point and the main finding
-
-Our previous production model was a RepSVTR (OpenOCR architecture) trained in a PyTorch port of the PaddleOCR
-pipeline. Before starting new training we ported it to PaddleOCR 3.7 (`tools/convert_torchocr_rec.py`, the
-outputs match the original ONNX to ~1e-5) and looked at why its training metrics (~0.5 line accuracy) were so far
-from its test accuracy (~0.9).
+## 2. The main finding
 
 **CTC was limited to 40 time steps during training.** The PP-LCNet backbones (PP-OCRv4/v5/v6) pool the feature
 map to 40 positions while training, and to width / 8 at inference. CTC needs at least as many steps as the label
@@ -68,12 +63,10 @@ All changes are config keys, **off by default**; upstream configs behave as befo
 ## 4. Model
 
 **PP-OCRv6 small** (PPLCNetV4 backbone, 2.7 M parameters, LightSVTR neck, CTC + NRTR heads) with
-`train_seq_len: -1`. It has the same layout as RepSVTR, is newer, and its pretrained weights load except for the
-output layers: the official v6 dictionary has no Cyrillic, so the CTC and NRTR output layers are trained from
-scratch on our dictionary (`dict/ru_dict_ext011026.txt`: 164 characters + space). Batches are up to 2 400 px wide
-at height 48, so lines up to ~250 characters keep their resolution.
-
-The ported RepSVTR (`configs/ru_RepSVTR_rec_150525.yml`) is kept as a baseline with the same data and metrics.
+`train_seq_len: -1`. Its pretrained weights load except for the output layers: the official v6 dictionary has no
+Cyrillic, so the CTC and NRTR output layers are trained from scratch on our dictionary (`dict/ru_dict_ext011026.txt`:
+164 characters + space). Batches are up to 2 400 px wide at height 48, so lines up to ~250 characters keep their
+resolution.
 
 ## 5. Data
 
@@ -197,7 +190,7 @@ All runs: Kaggle, 2× T4, fp16, batch 32 per card, 12 h sessions chained through
 
 | Run | Start | Data | Steps | Validation |
 |---|---|---|---|---|
-| v6 small | official pretrained v6 small weights | synthetic + stroyinf v2 | 88 000 (~1.6 epochs) | stroyinf v2 val5k: acc 0.706 (ported RepSVTR: 0.534) |
+| v6 small | official pretrained v6 small weights | synthetic + stroyinf v2 | 88 000 (~1.6 epochs) | stroyinf v2 val5k: acc 0.706 |
 | ft3 | weights of step 88k | + stroyinf modern + degraded synthetic | 103 355 (best at 100 000) | `all_val5k`: acc 0.774, ned 0.952 |
 
 Looking at the "errors" of the step-85k model showed that most of them were **label errors** of the text layer
