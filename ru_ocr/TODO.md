@@ -52,7 +52,9 @@ group onto `main` (upstream `dab3fe3`): the independent ones apply cleanly, the 
 
 - **PR 1 is ready:** branch `feat/rec-train-seq-len` in the fork, from upstream `main`; tests and black/flake8 pass;
   the title, text and checks are in [`upstream_prs/01-rec-train-seq-len.md`](upstream_prs/01-rec-train-seq-len.md).
-  Left: the CLA and opening the PR.
+  Opened as PaddlePaddle/PaddleOCR#18420.
+- **PR 2 and PR 3 are ready:** branches `feat/rec-metric-length-buckets` and `perf/warp-mls-vectorise` (+ a black
+  commit `d2fa563`); texts and checks in [`upstream_prs/`](upstream_prs/).
 - `fea334d` (`se_gate` for RepSVTR) is only for porting our old PyTorch weights: not proposed.
 - `71ebae1` and `74b40fe` also change `ru_ocr/` (smoke test, notebook): split those parts off.
 - Before opening:
